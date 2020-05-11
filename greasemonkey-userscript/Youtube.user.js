@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Transfers video stream to alternate video players: WebCast-Reloaded, ExoAirPlayer.
-// @version      0.1.0
+// @version      0.2.0
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -22,6 +22,7 @@
 
 // based on an analysis of code in 'ytdl':
 //   https://github.com/fent/node-ytdl-core/blob/master/lib/info.js
+//   https://github.com/fent/node-ytdl-core/blob/master/lib/sig.js
 
 var user_options = {
   "script_injection_delay_ms":   0,
@@ -36,6 +37,203 @@ var user_options = {
 }
 
 var payload = function(){
+
+  // -----------------------------------------------------------------------------------------------
+  // sig.js
+  // -----------------------------------------------------------------------------------------------
+  const process_cipher_format = async (format, html5playerfile) => {
+
+    const parse_cipher_format = () => {
+      let cipher
+
+      cipher = format.signatureCipher || format.cipher
+      if (!cipher)
+        return
+
+      cipher = cipher.split('&')
+      cipher = cipher.map(item => item.split('=', 2))
+      cipher = cipher.filter(item => (item.length === 2))
+
+      if (!cipher.length)
+        return
+
+      cipher.forEach(([key, val]) => {
+        if (format[key] === undefined)
+          format[key] = decodeURIComponent(val)
+      })
+    }
+
+    const download_file = async (url) => {
+      let response
+      response = await fetch(html5playerfile)
+      response = await response.text()
+      return response
+    }
+
+    const extractActions = (body) => {
+      const jsVarStr = '[a-zA-Z_\\$][a-zA-Z_0-9]*';
+      const jsSingleQuoteStr = `'[^'\\\\]*(:?\\\\[\\s\\S][^'\\\\]*)*'`;
+      const jsDoubleQuoteStr = `"[^"\\\\]*(:?\\\\[\\s\\S][^"\\\\]*)*"`;
+      const jsQuoteStr = `(?:${jsSingleQuoteStr}|${jsDoubleQuoteStr})`;
+      const jsKeyStr = `(?:${jsVarStr}|${jsQuoteStr})`;
+      const jsPropStr = `(?:\\.${jsVarStr}|\\[${jsQuoteStr}\\])`;
+      const jsEmptyStr = `(?:''|"")`;
+      const reverseStr = ':function\\(a\\)\\{' +
+        '(?:return )?a\\.reverse\\(\\)' +
+      '\\}';
+      const sliceStr = ':function\\(a,b\\)\\{' +
+        'return a\\.slice\\(b\\)' +
+      '\\}';
+      const spliceStr = ':function\\(a,b\\)\\{' +
+        'a\\.splice\\(0,b\\)' +
+      '\\}';
+      const swapStr = ':function\\(a,b\\)\\{' +
+        'var c=a\\[0\\];a\\[0\\]=a\\[b(?:%a\\.length)?\\];a\\[b(?:%a\\.length)?\\]=c(?:;return a)?' +
+      '\\}';
+
+      const actionsObjRegexp = new RegExp(
+        `var (${jsVarStr})=\\{((?:(?:${
+          jsKeyStr}${reverseStr}|${
+          jsKeyStr}${sliceStr}|${
+          jsKeyStr}${spliceStr}|${
+          jsKeyStr}${swapStr
+        }),?\\r?\\n?)+)\\};`,
+      );
+      const actionsFuncRegexp = new RegExp(`${`function(?: ${jsVarStr})?\\(a\\)\\{` +
+          `a=a\\.split\\(${jsEmptyStr}\\);\\s*` +
+          `((?:(?:a=)?${jsVarStr}`}${
+        jsPropStr
+      }\\(a,\\d+\\);)+)` +
+          `return a\\.join\\(${jsEmptyStr}\\)` +
+        `\\}`,
+      );
+      const reverseRegexp = new RegExp(`(?:^|,)(${jsKeyStr})${reverseStr}`, 'm');
+      const sliceRegexp = new RegExp(`(?:^|,)(${jsKeyStr})${sliceStr}`, 'm');
+      const spliceRegexp = new RegExp(`(?:^|,)(${jsKeyStr})${spliceStr}`, 'm');
+      const swapRegexp = new RegExp(`(?:^|,)(${jsKeyStr})${swapStr}`, 'm');
+
+      const objResult = actionsObjRegexp.exec(body);
+      const funcResult = actionsFuncRegexp.exec(body);
+      if (!objResult || !funcResult) { return null; }
+
+      const obj = objResult[1].replace(/\$/g, '\\$');
+      const objBody = objResult[2].replace(/\$/g, '\\$');
+      const funcBody = funcResult[1].replace(/\$/g, '\\$');
+
+      let result = reverseRegexp.exec(objBody);
+      const reverseKey = result && result[1]
+        .replace(/\$/g, '\\$')
+        .replace(/\$|^'|^"|'$|"$/g, '');
+      result = sliceRegexp.exec(objBody);
+      const sliceKey = result && result[1]
+        .replace(/\$/g, '\\$')
+        .replace(/\$|^'|^"|'$|"$/g, '');
+      result = spliceRegexp.exec(objBody);
+      const spliceKey = result && result[1]
+        .replace(/\$/g, '\\$')
+        .replace(/\$|^'|^"|'$|"$/g, '');
+      result = swapRegexp.exec(objBody);
+      const swapKey = result && result[1]
+        .replace(/\$/g, '\\$')
+        .replace(/\$|^'|^"|'$|"$/g, '');
+
+      const keys = `(${[reverseKey, sliceKey, spliceKey, swapKey].join('|')})`;
+      const myreg = `(?:a=)?${obj
+      }(?:\\.${keys}|\\['${keys}'\\]|\\["${keys}"\\])` +
+        `\\(a,(\\d+)\\)`;
+      const tokenizeRegexp = new RegExp(myreg, 'g');
+      const tokens = [];
+      while ((result = tokenizeRegexp.exec(funcBody)) !== null) {
+        let key = result[1] || result[2] || result[3];
+        switch (key) {
+          case swapKey:
+            tokens.push(`w${result[4]}`);
+            break;
+          case reverseKey:
+            tokens.push('r');
+            break;
+          case sliceKey:
+            tokens.push(`s${result[4]}`);
+            break;
+          case spliceKey:
+            tokens.push(`p${result[4]}`);
+            break;
+        }
+      }
+      return tokens;
+    }
+
+    const decipher = (tokens, sig) => {
+      const swapHeadAndPosition = (arr, position) => {
+        const first = arr[0];
+        arr[0] = arr[position % arr.length];
+        arr[position] = first;
+        return arr;
+      }
+
+      sig = sig.split('');
+      for (let i = 0, len = tokens.length; i < len; i++) {
+        let token = tokens[i], pos;
+        switch (token[0]) {
+          case 'r':
+            sig = sig.reverse();
+            break;
+          case 'w':
+            pos = ~~token.slice(1);
+            sig = swapHeadAndPosition(sig, pos);
+            break;
+          case 's':
+            pos = ~~token.slice(1);
+            sig = sig.slice(pos);
+            break;
+          case 'p':
+            pos = ~~token.slice(1);
+            sig.splice(0, pos);
+            break;
+        }
+      }
+      return sig.join('');
+    }
+
+    const setDownloadURL = (format, sig) => {
+      let decodedUrl, search
+      decodedUrl = format.url
+      decodedUrl = new URL(decodedUrl)
+
+      // update search
+      search = new URLSearchParams((decodedUrl.search ? decodedUrl.search.slice(1) : ''))
+      search.set('ratebypass', 'yes')
+      search.set((format.sp ? format.sp : 'signature'), sig)
+      decodedUrl.search = '?' + search.toString()
+
+      format.url = decodedUrl.toString()
+    }
+
+    try {
+      parse_cipher_format()
+
+      if (!format.s || !format.url)
+        throw ''
+
+      const html5player = await download_file(html5playerfile)
+      const tokens      = extractActions(html5player)
+
+      if (!tokens || !tokens.length)
+        throw ''
+
+      const sig = decipher(tokens, format.s)
+
+      setDownloadURL(format, sig)
+    }
+    catch(e) {
+      format.url = null
+    }
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // info.js
+  // -----------------------------------------------------------------------------------------------
+
   const parseFormats = (info) => {
     let formats = []
     if (info.player_response.streamingData) {
@@ -64,7 +262,7 @@ var payload = function(){
     if (formats.length === 1)
       return formats[0]
 
-    let filtered = formats.filter(format => !!format.url)
+    let filtered = [...formats]
 
     if (window.videoFilter_includesAudio) {
       // example: true
@@ -98,7 +296,14 @@ var payload = function(){
         ?  0 : 1
     })
 
-    return (filtered.length) ? filtered[0] : null
+    let noncipher = filtered.filter(format => !!format.url)
+    if (noncipher.length)
+      return noncipher[0]
+    if (filtered.length)
+      return filtered[0]
+
+    // no matches
+    return null
   }
 
   const get_format_url = (format) => {
@@ -114,7 +319,7 @@ var payload = function(){
     return url
   }
 
-  const get_hls_url = () => {
+  const get_hls_url = async () => {
     let $scripts, script, config, player_response, formats, format
 
     try {
@@ -160,8 +365,25 @@ var payload = function(){
     catch(e){}
 
     format = filterFormats(formats)
+
+    if (!format)
+      return
+
+    if (!format.url) {
+      // attempt to decipher
+      const html5playerfile = (new URL(config.assets.js, top.location.href)).href
+      await process_cipher_format(format, html5playerfile)
+    }
+
+    if (!format.url)
+      return
+
     return get_format_url(format)
   }
+
+  // -----------------------------------------------------------------------------------------------
+  // extension-specific logic
+  // -----------------------------------------------------------------------------------------------
 
   const get_external_url = (hls_url, vtt_url, referer_url) => {
     let encoded_hls_url, encoded_vtt_url, webcast_reloaded_base, webcast_reloaded_url
@@ -192,8 +414,12 @@ var payload = function(){
     }
   }
 
-  const process_page = () => {
-    const hls_url = get_hls_url()
+  // -----------------------------------------------------------------------------------------------
+  // bootstrap
+  // -----------------------------------------------------------------------------------------------
+
+  const process_page = async () => {
+    const hls_url = await get_hls_url()
     if (!hls_url)
       return
 
