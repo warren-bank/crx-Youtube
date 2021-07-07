@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      1.0.0
+// @version      1.0.1
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -297,12 +297,23 @@ const get_tokens = async () => {
     jsURL:      /^.*"jsUrl":"([^"]+)".*$/
   }
 
-  let jsURL
-  jsURL = document.querySelector('#player > #player-wrap > #player-api').parentNode.querySelector(':scope > script')
+  let scriptNodes, scriptNode, scriptText, jsURL
+
+  scriptNodes = unsafeWindow.document.querySelectorAll('script:not([href])')
+  for (let i=0; i < scriptNodes.length; i++) {
+    scriptNode = scriptNodes[i]
+    scriptText = scriptNode.innerText.replace(regexs.whitespace, ' ')
+    if (regexs.jsURL.test(scriptText)) {
+      jsURL = scriptText.replace(regexs.jsURL, '$1')
+      break
+    }
+  }
+
+  scriptNodes = null
+  scriptNode  = null
+  scriptText  = null
+
   if (!jsURL) return
-  jsURL = jsURL.innerText.replace(regexs.whitespace, ' ')
-  if (!regexs.jsURL.test(jsURL)) return
-  jsURL = jsURL.replace(regexs.jsURL, '$1')
 
   let tokens
   tokens = await fetch(jsURL)
