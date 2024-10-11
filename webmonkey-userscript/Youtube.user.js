@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      1.0.1
+// @version      1.0.2
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -57,6 +57,24 @@ var constants = {
 
 var state = {
   "tokens":                        null
+}
+
+// ----------------------------------------------------------------------------- CSP
+
+// add support for CSP 'Trusted Type' assignment
+var add_default_trusted_type_policy = function() {
+  if (typeof unsafeWindow.trustedTypes !== 'undefined') {
+    try {
+      var passthrough_policy = function(string) {return string}
+
+      unsafeWindow.trustedTypes.createPolicy('default', {
+          createHTML:      passthrough_policy,
+          createScript:    passthrough_policy,
+          createScriptURL: passthrough_policy
+      })
+    }
+    catch(e) {}
+  }
 }
 
 // ----------------------------------------------------------------------------- helpers
@@ -809,6 +827,7 @@ var init = function() {
     get_media_formats(function(formats) {
       if (!formats) return
 
+      add_default_trusted_type_policy()
       rewrite_page_dom(formats)
     })
   })
