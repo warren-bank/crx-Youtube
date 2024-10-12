@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      2.0.0
+// @version      2.0.1
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -458,9 +458,11 @@ const normalize_formats = (formats) => formats
     else {
       format.mimeType = format.mimeType.split(';')[0].trim()
 
-      if (mime_filetype_regex.test(format.mimeType)) {
-        format.url += '#file.' + format.mimeType.replace(mime_filetype_regex, '$1')
-      }
+      if (!format.container && mime_filetype_regex.test(format.mimeType))
+        format.container = format.mimeType.replace(mime_filetype_regex, '$1')
+
+      if (format.container)
+        format.url += '#file.' + format.container
     }
     return format
   })
