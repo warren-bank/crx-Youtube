@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      1.0.2
+// @version      2.0.0
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
 // @icon         https://www.youtube.com/favicon.ico
+// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@latest/dist/es2020/ytdl-core.js
 // @run-at       document_end
 // @grant        unsafeWindow
 // @homepage     https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es6
@@ -19,16 +20,9 @@
 // @copyright    Warren Bank
 // ==/UserScript==
 
-// based on an analysis of code in 'ytdl':
-//   https://github.com/fent/node-ytdl-core/blob/master/lib/info.js
-//   https://github.com/fent/node-ytdl-core/blob/master/lib/sig.js
-
 // ----------------------------------------------------------------------------- constants
 
 const user_options = {
-  "poll_window_interval_ms":         500,
-  "poll_window_timeout_ms":        30000,
-
   "redirect_to_webcast_reloaded":  true,
   "force_http":                    true,
   "force_https":                   false
@@ -53,10 +47,6 @@ const constants = {
   "img_urls": {
     "base_webcast_reloaded_icons": "https://github.com/warren-bank/crx-webcast-reloaded/raw/gh-pages/chrome_extension/2-release/popup/img/"
   }
-}
-
-const state = {
-  "tokens":                        null
 }
 
 // ----------------------------------------------------------------------------- CSP
@@ -214,309 +204,6 @@ const process_video_url = (video_url, video_type, vtt_url, referer_url) => {
   }
 }
 
-// ----------------------------------------------------------------------------- cipher: download necessary data
-
-const extractTokens = (body) => {
-  const jsVarStr         = '[a-zA-Z_\\$][a-zA-Z_0-9]*';
-  const jsSingleQuoteStr = `'[^'\\\\]*(:?\\\\[\\s\\S][^'\\\\]*)*'`;
-  const jsDoubleQuoteStr = `"[^"\\\\]*(:?\\\\[\\s\\S][^"\\\\]*)*"`;
-  const jsQuoteStr       = `(?:${jsSingleQuoteStr}|${jsDoubleQuoteStr})`;
-  const jsKeyStr         = `(?:${jsVarStr}|${jsQuoteStr})`;
-  const jsPropStr        = `(?:\\.${jsVarStr}|\\[${jsQuoteStr}\\])`;
-  const jsEmptyStr       = `(?:''|"")`;
-  const reverseStr       = ':function\\(a\\)\\{' +
-    '(?:return )?a\\.reverse\\(\\)' +
-  '\\}';
-  const sliceStr = ':function\\(a,b\\)\\{' +
-    'return a\\.slice\\(b\\)' +
-  '\\}';
-  const spliceStr = ':function\\(a,b\\)\\{' +
-    'a\\.splice\\(0,b\\)' +
-  '\\}';
-  const swapStr = ':function\\(a,b\\)\\{' +
-    'var c=a\\[0\\];a\\[0\\]=a\\[b(?:%a\\.length)?\\];a\\[b(?:%a\\.length)?\\]=c(?:;return a)?' +
-  '\\}';
-
-  const actionsObjRegexp = new RegExp(
-    `var (${jsVarStr})=\\{((?:(?:${
-      jsKeyStr}${reverseStr}|${
-      jsKeyStr}${sliceStr}|${
-      jsKeyStr}${spliceStr}|${
-      jsKeyStr}${swapStr
-    }),?\\r?\\n?)+)\\};`,
-  );
-  const actionsFuncRegexp = new RegExp(`${`function(?: ${jsVarStr})?\\(a\\)\\{` +
-      `a=a\\.split\\(${jsEmptyStr}\\);\\s*` +
-      `((?:(?:a=)?${jsVarStr}`}${
-    jsPropStr
-  }\\(a,\\d+\\);)+)` +
-      `return a\\.join\\(${jsEmptyStr}\\)` +
-    `\\}`,
-  );
-  const reverseRegexp = new RegExp(`(?:^|,)(${jsKeyStr})${reverseStr}`, 'm');
-  const sliceRegexp   = new RegExp(`(?:^|,)(${jsKeyStr})${sliceStr}`, 'm');
-  const spliceRegexp  = new RegExp(`(?:^|,)(${jsKeyStr})${spliceStr}`, 'm');
-  const swapRegexp    = new RegExp(`(?:^|,)(${jsKeyStr})${swapStr}`, 'm');
-
-  const objResult  = actionsObjRegexp.exec(body);
-  const funcResult = actionsFuncRegexp.exec(body);
-  if (!objResult || !funcResult) { return null; }
-
-  const obj      = objResult[1].replace(/\$/g, '\\$');
-  const objBody  = objResult[2].replace(/\$/g, '\\$');
-  const funcBody = funcResult[1].replace(/\$/g, '\\$');
-
-  let result = reverseRegexp.exec(objBody);
-  const reverseKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-  result = sliceRegexp.exec(objBody);
-  const sliceKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-  result = spliceRegexp.exec(objBody);
-  const spliceKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-  result = swapRegexp.exec(objBody);
-  const swapKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-
-  const keys = `(${[reverseKey, sliceKey, spliceKey, swapKey].join('|')})`;
-  const myreg = `(?:a=)?${obj
-  }(?:\\.${keys}|\\['${keys}'\\]|\\["${keys}"\\])` +
-    `\\(a,(\\d+)\\)`;
-  const tokenizeRegexp = new RegExp(myreg, 'g');
-  const tokens = [];
-  while ((result = tokenizeRegexp.exec(funcBody)) !== null) {
-    let key = result[1] || result[2] || result[3];
-    switch (key) {
-      case swapKey:
-        tokens.push(`w${result[4]}`);
-        break;
-      case reverseKey:
-        tokens.push('r');
-        break;
-      case sliceKey:
-        tokens.push(`s${result[4]}`);
-        break;
-      case spliceKey:
-        tokens.push(`p${result[4]}`);
-        break;
-    }
-  }
-  return tokens;
-}
-
-const get_tokens = async () => {
-  const regexs = {
-    whitespace: /[\s\t\r\n]+/g,
-    jsURL:      /^.*"jsUrl":"([^"]+)".*$/
-  }
-
-  let scriptNodes, scriptNode, scriptText, jsURL
-
-  scriptNodes = unsafeWindow.document.querySelectorAll('script:not([href])')
-  for (let i=0; i < scriptNodes.length; i++) {
-    scriptNode = scriptNodes[i]
-    scriptText = scriptNode.innerText.replace(regexs.whitespace, ' ')
-    if (regexs.jsURL.test(scriptText)) {
-      jsURL = scriptText.replace(regexs.jsURL, '$1')
-      break
-    }
-  }
-
-  scriptNodes = null
-  scriptNode  = null
-  scriptText  = null
-
-  if (!jsURL) return
-
-  let tokens
-  tokens = await fetch(jsURL)
-  tokens = await tokens.text()
-  tokens = extractTokens(tokens)
-  if (!tokens || !Array.isArray(tokens) || !tokens.length) return
-
-  state.tokens = tokens
-}
-
-// ----------------------------------------------------------------------------- cipher: decode individual media formats
-
-const parse_cipher = (format) => {
-  let cipher
-
-  cipher = format.signatureCipher || format.cipher
-  if (!cipher)
-    return
-
-  cipher = cipher.split('&')
-  cipher = cipher.map(item => item.split('=', 2))
-  cipher = cipher.filter(item => (item.length === 2))
-
-  if (!cipher.length)
-    return
-
-  cipher.forEach(([key, val]) => {
-    if (format[key] === undefined)
-      format[key] = decodeURIComponent(val)
-  })
-}
-
-const decipher_sig = (format) => {
-  const tokens = state.tokens
-  let sig      = format.s
-
-  const swapHeadAndPosition = (arr, position) => {
-    const first = arr[0];
-    arr[0] = arr[position % arr.length];
-    arr[position] = first;
-    return arr;
-  }
-
-  sig = sig.split('');
-  for (let i = 0, len = tokens.length; i < len; i++) {
-    let token = tokens[i], pos;
-    switch (token[0]) {
-      case 'r':
-        sig = sig.reverse();
-        break;
-      case 'w':
-        pos = ~~token.slice(1);
-        sig = swapHeadAndPosition(sig, pos);
-        break;
-      case 's':
-        pos = ~~token.slice(1);
-        sig = sig.slice(pos);
-        break;
-      case 'p':
-        pos = ~~token.slice(1);
-        sig.splice(0, pos);
-        break;
-    }
-  }
-  return sig.join('');
-}
-
-const decipher_url = (format) => {
-  if (!state.tokens) return
-
-  parse_cipher(format)
-  if (!format.s || !format.url) return
-
-  const sig = decipher_sig(format)
-
-  let decodedUrl, search
-  decodedUrl = format.url
-  decodedUrl = new URL(decodedUrl)
-
-  // update search
-  search = new URLSearchParams((decodedUrl.search ? decodedUrl.search.slice(1) : ''))
-  search.set('ratebypass', 'yes')
-  search.set((format.sp ? format.sp : 'signature'), sig)
-  decodedUrl.search = '?' + search.toString()
-
-  format.url = decodedUrl.toString()
-}
-
-// ----------------------------------------------------------------------------- collect media formats
-
-const get_player_response = () => {
-  return new Promise((resolve, reject) => {
-    const max_poll_window_attempts = Math.ceil(user_options.poll_window_timeout_ms / user_options.poll_window_interval_ms)
-    let count_poll_window_attempts = 0
-
-    const poll_for_data = () => {
-      count_poll_window_attempts++
-
-      if (count_poll_window_attempts <= max_poll_window_attempts) {
-        if (unsafeWindow.ytInitialPlayerResponse && (typeof unsafeWindow.ytInitialPlayerResponse === 'object'))
-          resolve(unsafeWindow.ytInitialPlayerResponse)
-        else
-          unsafeWindow.setTimeout(poll_for_data, user_options.poll_window_interval_ms)
-      }
-      else {
-        resolve(null)
-      }
-    }
-    poll_for_data()
-  })
-}
-
-const update_format_url = (format) => {
-  if (format && (typeof format === 'object') && format.url && format.mimeType) {
-    let regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
-    if (regex.test(format.mimeType)) {
-      format.url += '#file.' + format.mimeType.replace(regex, '$1')
-    }
-  }
-}
-
-const get_media_formats = async () => {
-  const player_response = await get_player_response()
-  const regexs = {
-    mimeType: /^\s*(.*?);\s+codecs\s*=\s*"(.+)"\s*$/i
-  }
-  const formats = []
-  let prospective_formats = []
-  let matches
-
-  if (player_response && (typeof player_response === 'object') && player_response.streamingData && (typeof player_response.streamingData === 'object')) {
-    if (player_response.streamingData.hlsManifestUrl) {
-      formats.push({
-        url:      player_response.streamingData.hlsManifestUrl + '#video.m3u8',
-        mimeType: 'application/x-mpegurl'
-      })
-    }
-    if (player_response.streamingData.dashManifestUrl) {
-      formats.push({
-        url:      player_response.streamingData.dashManifestUrl + '#video.mpd',
-        mimeType: 'application/dash+xml'
-      })
-    }
-    if (player_response.streamingData.formats && Array.isArray(player_response.streamingData.formats) && player_response.streamingData.formats.length) {
-      prospective_formats = [...prospective_formats, ...player_response.streamingData.formats]
-    }
-    if (player_response.streamingData.adaptiveFormats && Array.isArray(player_response.streamingData.adaptiveFormats) && player_response.streamingData.adaptiveFormats.length) {
-      prospective_formats = [...prospective_formats, ...player_response.streamingData.adaptiveFormats]
-    }
-    if (prospective_formats.length) {
-      for (let format of prospective_formats) {
-        if (format && (typeof format === 'object')) {
-          if (format.mimeType) {
-            matches = regexs.mimeType.exec(format.mimeType)
-
-            if (matches && Array.isArray(matches) && (matches.length === 3)) {
-              format.mimeType = matches[1]
-              format.codecs   = matches[2]
-            }
-          }
-          if (!format.url) {
-            decipher_url(format)
-          }
-          if (format.url && format.mimeType) {
-            update_format_url(format)
-            formats.push(format)
-          }
-        }
-      }
-    }
-  }
-
-  if (!formats.length)
-    return null
-
-  formats.sort((a,b) => {
-    // sort formats by bitrate in decreasing order
-    return (a.bitrate < b.bitrate)
-      ? -1 : (a.bitrate === b.bitrate)
-      ?  0 : 1
-  })
-
-  return formats
-}
-
 // ----------------------------------------------------------------------------- display results
 
 const format_subset_to_tablerows = (format) => {
@@ -524,7 +211,7 @@ const format_subset_to_tablerows = (format) => {
   const rows = []
 
   for (let key in format) {
-    if (keys_whitelist.indexOf(key) >= 0)
+    if ((keys_whitelist.indexOf(key) >= 0) && format[key])
       rows.push([key, format[key]])
   }
 
@@ -753,19 +440,52 @@ const rewrite_page_dom = (formats) => {
   }
 }
 
+// ----------------------------------------------------------------------------- data structure
+
+const mime_filetype_regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
+
+const normalize_formats = (formats) => formats
+  .filter(format => !!format && (typeof format === 'object') && format.url && format.mimeType)
+  .map(format => {
+    if (format.isHLS) {
+      format.mimeType = 'application/x-mpegurl'
+      format.url += '#video.m3u8'
+    }
+    else if (format.isDashMPD) {
+      format.mimeType = 'application/dash+xml'
+      format.url += '#video.mpd'
+    }
+    else {
+      format.mimeType = format.mimeType.split(';')[0].trim()
+
+      if (mime_filetype_regex.test(format.mimeType)) {
+        format.url += '#file.' + format.mimeType.replace(mime_filetype_regex, '$1')
+      }
+    }
+    return format
+  })
+  .sort((a,b) => {
+    // sort formats by bitrate in decreasing order
+    return (a.bitrate < b.bitrate)
+      ? 1 : (a.bitrate === b.bitrate)
+      ?  0 : -1
+  })
+
 // ----------------------------------------------------------------------------- bootstrap
 
 const init = async () => {
-  await get_tokens()
-  if (!state.tokens) return
+  let info = await window.ytdl.getInfo(window.location.href)
+  if (!info || !info.formats || !info.formats.length) return
 
-  const formats = await get_media_formats()
-  if (!formats) return
+  const formats = normalize_formats(info.formats)
+  info = null
 
   add_default_trusted_type_policy()
   rewrite_page_dom(formats)
 }
 
-init()
+if (window.ytdl) {
+  init()
+}
 
 // -----------------------------------------------------------------------------
