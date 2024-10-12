@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      1.0.2
+// @version      2.0.0
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
 // @icon         https://www.youtube.com/favicon.ico
+// @require      https://github.com/warren-bank/js-url/raw/v3.1.4/es5-browser/jsURL.js
+// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@latest/dist/es5/ytdl-core.js
 // @run-at       document_end
 // @grant        unsafeWindow
 // @homepage     https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es5
@@ -19,16 +21,9 @@
 // @copyright    Warren Bank
 // ==/UserScript==
 
-// based on an analysis of code in 'ytdl':
-//   https://github.com/fent/node-ytdl-core/blob/master/lib/info.js
-//   https://github.com/fent/node-ytdl-core/blob/master/lib/sig.js
-
 // ----------------------------------------------------------------------------- constants
 
 var user_options = {
-  "poll_window_interval_ms":         500,
-  "poll_window_timeout_ms":        30000,
-
   "redirect_to_webcast_reloaded":  true,
   "force_http":                    true,
   "force_https":                   false
@@ -55,8 +50,22 @@ var constants = {
   }
 }
 
-var state = {
-  "tokens":                        null
+// ----------------------------------------------------------------------------- ES6 polyfills
+
+var addMissingGlobals = function() {
+  // "youtube.com" provides several polyfill libraries.
+  // This userscript demonstrates using these external dependencies to run ytdl-core in older browsers.
+  // No polyfill library is provided for the URL class.
+  // Testing reveals that Chrome 30 has a URL class,
+  // but its implementation isn't consistent with modern standards;
+  // an external polyfill is required.
+
+  if ((!window.URL || (typeof window.URL !== 'function') || !window.URLSearchParams || (typeof window.URLSearchParams !== 'function')) && window.jsURL) {
+    Object.assign(window, {
+      "URL":             window.jsURL.URL,
+      "URLSearchParams": window.jsURL.URLSearchParams
+    })
+  }
 }
 
 // ----------------------------------------------------------------------------- CSP
@@ -86,79 +95,6 @@ var make_element = function(elementName, html) {
     el.innerHTML = html
 
   return el
-}
-
-// -----------------------------------------------------------------------------
-
-// make GET request, pass plaintext response to callback
-var download_text = function(url, headers, callback) {
-  var xhr = new unsafeWindow.XMLHttpRequest()
-  xhr.open("GET", url, true, null, null)
-
-  if (headers && (typeof headers === 'object')) {
-    var keys = Object.keys(headers)
-    var key, val
-    for (var i=0; i < keys.length; i++) {
-      key = keys[i]
-      val = headers[key]
-      xhr.setRequestHeader(key, val)
-    }
-  }
-
-  xhr.onload = function(e) {
-    if (xhr.readyState === 4) {
-      if (xhr.status === 200) {
-        callback(xhr.responseText)
-      }
-    }
-  }
-
-  xhr.send()
-}
-
-// -----------------------------------------------------------------------------
-
-var parse_url = function(href) {
-  var parsed_url = {url: href, search: {}}
-  var index, query, vars, pair, name, value
-
-  index = href.indexOf('?')
-  if (index === -1) return parsed_url
-
-  parsed_url.url = href.substr(0, index)
-  query = href.substr(index + 1)
-
-  vars = query.split('&')
-  for (var i=0; i < vars.length; i++) {
-    pair = vars[i].split('=')
-    if (pair.length === 2) {
-      name  = pair[0]
-      value = pair[1]
-      parsed_url.search[name] = decodeURIComponent(value)
-    }
-  }
-
-  return parsed_url
-}
-
-var reconstitute_parsed_url = function(parsed_url) {
-  if (!parsed_url || (typeof parsed_url !== 'object') || !parsed_url.url) return null
-
-  if (!parsed_url.search || (typeof parsed_url.search !== 'object')) return parsed_url.url
-
-  var search_keys = Object.keys(parsed_url.search)
-  if (!search_keys.length) return parsed_url.url
-
-  var vars = []
-  var name, value, pair
-  for (var i=0; i < search_keys.length; i++) {
-    name  = search_keys[i]
-    value = parsed_url.search[name]
-    pair  = name + '=' + encodeURIComponent(value)
-    vars.push(pair)
-  }
-
-  return parsed_url.url + '?' + vars.join('&')
 }
 
 // ----------------------------------------------------------------------------- URL links to tools on Webcast Reloaded website
@@ -287,294 +223,6 @@ var process_video_url = function(video_url, video_type, vtt_url, referer_url) {
   }
 }
 
-// ----------------------------------------------------------------------------- cipher: download necessary data
-
-var extractTokens = function(body) {
-  var jsVarStr         = '[a-zA-Z_\\$][a-zA-Z_0-9]*';
-  var jsSingleQuoteStr = "'[^'\\\\]*(:?\\\\[\\s\\S][^'\\\\]*)*'";
-  var jsDoubleQuoteStr = '"[^"\\\\]*(:?\\\\[\\s\\S][^"\\\\]*)*"';
-  var jsQuoteStr       = '(?:' + jsSingleQuoteStr + '|' + jsDoubleQuoteStr + ')';
-  var jsKeyStr         = '(?:' + jsVarStr + '|' + jsQuoteStr + ')';
-  var jsPropStr        = '(?:\\.' + jsVarStr + '|\\[' + jsQuoteStr + '\\])';
-  var jsEmptyStr       = "(?:''|" + '"")';
-  var reverseStr       = ':function\\(a\\)\\{' +
-    '(?:return )?a\\.reverse\\(\\)' +
-  '\\}';
-  var sliceStr = ':function\\(a,b\\)\\{' +
-    'return a\\.slice\\(b\\)' +
-  '\\}';
-  var spliceStr = ':function\\(a,b\\)\\{' +
-    'a\\.splice\\(0,b\\)' +
-  '\\}';
-  var swapStr = ':function\\(a,b\\)\\{' +
-    'var c=a\\[0\\];a\\[0\\]=a\\[b(?:%a\\.length)?\\];a\\[b(?:%a\\.length)?\\]=c(?:;return a)?' +
-  '\\}';
-
-  var actionsObjRegexp = new RegExp(
-    'var (' + jsVarStr + ')=\\{((?:(?:' +
-      jsKeyStr + reverseStr + '|' +
-      jsKeyStr + sliceStr   + '|' +
-      jsKeyStr + spliceStr  + '|' +
-      jsKeyStr + swapStr    +
-    '),?\\r?\\n?)+)\\};'
-  );
-  var actionsFuncRegexp = new RegExp(
-    'function(?: ' + jsVarStr + ')?\\(a\\)\\{' + 'a=a\\.split\\(' + jsEmptyStr + '\\);\\s*' + '((?:(?:a=)?' + jsVarStr + jsPropStr + '\\(a,\\d+\\);)+)' + 'return a\\.join\\(' + jsEmptyStr + '\\)' + '\\}'
-  );
-  var reverseRegexp = new RegExp('(?:^|,)(' + jsKeyStr + ')' + reverseStr, 'm');
-  var sliceRegexp   = new RegExp('(?:^|,)(' + jsKeyStr + ')' + sliceStr,   'm');
-  var spliceRegexp  = new RegExp('(?:^|,)(' + jsKeyStr + ')' + spliceStr,  'm');
-  var swapRegexp    = new RegExp('(?:^|,)(' + jsKeyStr + ')' + swapStr,    'm');
-
-  var objResult  = actionsObjRegexp.exec(body);
-  var funcResult = actionsFuncRegexp.exec(body);
-  if (!objResult || !funcResult) { return null; }
-
-  var obj      = objResult[1].replace(/\$/g,  '\\$');
-  var objBody  = objResult[2].replace(/\$/g,  '\\$');
-  var funcBody = funcResult[1].replace(/\$/g, '\\$');
-
-  var result = reverseRegexp.exec(objBody);
-  var reverseKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-  result = sliceRegexp.exec(objBody);
-  var sliceKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-  result = spliceRegexp.exec(objBody);
-  var spliceKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-  result = swapRegexp.exec(objBody);
-  var swapKey = result && result[1]
-    .replace(/\$/g, '\\$')
-    .replace(/\$|^'|^"|'$|"$/g, '');
-
-  var keys = '(' + [reverseKey, sliceKey, spliceKey, swapKey].join('|') + ')';
-  var myreg = '(?:a=)?' + obj + '(?:\\.' + keys + "|\\['" + keys + "'\\]" + '|\\["' + keys + '"\\])' + '\\(a,(\\d+)\\)';
-  var tokenizeRegexp = new RegExp(myreg, 'g');
-  var tokens = [];
-  var key
-  while ((result = tokenizeRegexp.exec(funcBody)) !== null) {
-    key = result[1] || result[2] || result[3];
-
-    if (key === swapKey)
-      tokens.push('w' + result[4]);
-    else if (key === reverseKey)
-      tokens.push('r');
-    else if (key === sliceKey)
-      tokens.push('s' + result[4]);
-    else if (key === spliceKey)
-      tokens.push('p' + result[4]);
-  }
-  return tokens;
-}
-
-var get_tokens = function(callback) {
-  var regexs = {
-    whitespace: /[\s\t\r\n]+/g,
-    jsURL:      /^.*"jsUrl":"([^"]+)".*$/
-  }
-
-  var scriptNodes, scriptNode, scriptText, jsURL
-
-  scriptNodes = unsafeWindow.document.querySelectorAll('script:not([href])')
-  for (var i=0; i < scriptNodes.length; i++) {
-    scriptNode = scriptNodes[i]
-    scriptText = scriptNode.innerText.replace(regexs.whitespace, ' ')
-    if (regexs.jsURL.test(scriptText)) {
-      jsURL = scriptText.replace(regexs.jsURL, '$1')
-      break
-    }
-  }
-
-  scriptNodes = null
-  scriptNode  = null
-  scriptText  = null
-
-  if (!jsURL) return
-
-  download_text(jsURL, null, function(tokens) {
-    tokens = extractTokens(tokens)
-    if (!tokens || !Array.isArray(tokens) || !tokens.length) return
-
-    state.tokens = tokens
-    callback()
-  })
-}
-
-// ----------------------------------------------------------------------------- cipher: decode individual media formats
-
-var parse_cipher = function(format) {
-  var cipher, key, val
-
-  cipher = format.signatureCipher || format.cipher
-  if (!cipher)
-    return
-
-  cipher = cipher.split('&')
-  cipher = cipher.map(function(item) {return item.split('=', 2)})
-  cipher = cipher.filter(function(item) {return (item.length === 2)})
-
-  if (!cipher.length)
-    return
-
-  for (var i=0; i < cipher.length; i++) {
-    key = cipher[i][0]
-    val = cipher[i][1]
-
-    if (typeof format[key] === 'undefined')
-      format[key] = decodeURIComponent(val)
-  }
-}
-
-var decipher_sig = function(format) {
-  var tokens = state.tokens
-  var len    = tokens.length
-  var sig    = format.s
-  var token, pos
-
-  var swapHeadAndPosition = function(arr, position) {
-    var first = arr[0];
-    arr[0] = arr[position % arr.length];
-    arr[position] = first;
-    return arr;
-  }
-
-  sig = sig.split('');
-  for (var i=0; i < len; i++) {
-    token = tokens[i];
-    switch (token[0]) {
-      case 'r':
-        sig = sig.reverse();
-        break;
-      case 'w':
-        pos = ~~token.slice(1);
-        sig = swapHeadAndPosition(sig, pos);
-        break;
-      case 's':
-        pos = ~~token.slice(1);
-        sig = sig.slice(pos);
-        break;
-      case 'p':
-        pos = ~~token.slice(1);
-        sig.splice(0, pos);
-        break;
-    }
-  }
-  return sig.join('');
-}
-
-var decipher_url = function(format) {
-  if (!state.tokens) return
-
-  parse_cipher(format)
-  if (!format.s || !format.url) return
-
-  var sig = decipher_sig(format)
-
-  var decodedUrl = parse_url(format.url)
-  decodedUrl.search['ratebypass'] = 'yes'
-  decodedUrl.search[(format.sp ? format.sp : 'signature')] = sig
-  format.url = reconstitute_parsed_url(decodedUrl)
-}
-
-// ----------------------------------------------------------------------------- collect media formats
-
-var get_player_response = function(callback) {
-  var max_poll_window_attempts = Math.ceil(user_options.poll_window_timeout_ms / user_options.poll_window_interval_ms)
-  var count_poll_window_attempts = 0
-
-  var poll_for_data = function() {
-    count_poll_window_attempts++
-
-    if (count_poll_window_attempts <= max_poll_window_attempts) {
-      if (unsafeWindow.ytInitialPlayerResponse && (typeof unsafeWindow.ytInitialPlayerResponse === 'object'))
-        callback(unsafeWindow.ytInitialPlayerResponse)
-      else
-        unsafeWindow.setTimeout(poll_for_data, user_options.poll_window_interval_ms)
-    }
-  }
-  poll_for_data()
-}
-
-var update_format_url = function(format) {
-  if (format && (typeof format === 'object') && format.url && format.mimeType) {
-    var regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
-    if (regex.test(format.mimeType)) {
-      format.url += '#file.' + format.mimeType.replace(regex, '$1')
-    }
-  }
-}
-
-var get_media_formats = function(callback) {
-  get_player_response(function(player_response) {
-    var regexs = {
-      mimeType: /^\s*(.*?);\s+codecs\s*=\s*"(.+)"\s*$/i
-    }
-    var formats = []
-    var prospective_formats = []
-    var format, matches
-
-    if (player_response && (typeof player_response === 'object') && player_response.streamingData && (typeof player_response.streamingData === 'object')) {
-      if (player_response.streamingData.hlsManifestUrl) {
-        formats.push({
-          url:      player_response.streamingData.hlsManifestUrl + '#video.m3u8',
-          mimeType: 'application/x-mpegurl'
-        })
-      }
-      if (player_response.streamingData.dashManifestUrl) {
-        formats.push({
-          url:      player_response.streamingData.dashManifestUrl + '#video.mpd',
-          mimeType: 'application/dash+xml'
-        })
-      }
-      if (player_response.streamingData.formats && Array.isArray(player_response.streamingData.formats) && player_response.streamingData.formats.length) {
-        prospective_formats = prospective_formats.concat(player_response.streamingData.formats)
-      }
-      if (player_response.streamingData.adaptiveFormats && Array.isArray(player_response.streamingData.adaptiveFormats) && player_response.streamingData.adaptiveFormats.length) {
-        prospective_formats = prospective_formats.concat(player_response.streamingData.adaptiveFormats)
-      }
-      if (prospective_formats.length) {
-        for (var i=0; i < prospective_formats.length; i++) {
-          format = prospective_formats[i]
-
-          if (format && (typeof format === 'object')) {
-            if (format.mimeType) {
-              matches = regexs.mimeType.exec(format.mimeType)
-
-              if (matches && Array.isArray(matches) && (matches.length === 3)) {
-                format.mimeType = matches[1]
-                format.codecs   = matches[2]
-              }
-            }
-            if (!format.url) {
-              decipher_url(format)
-            }
-            if (format.url && format.mimeType) {
-              update_format_url(format)
-              formats.push(format)
-            }
-          }
-        }
-      }
-    }
-
-    if (!formats.length)
-      return null
-
-    formats.sort(function(a,b) {
-      // sort formats by bitrate in decreasing order
-      return (a.bitrate < b.bitrate)
-        ? -1 : (a.bitrate === b.bitrate)
-        ?  0 : 1
-    })
-
-    callback(formats)
-  })
-}
-
 // ----------------------------------------------------------------------------- display results
 
 var format_subset_to_tablerows = function(format) {
@@ -586,7 +234,7 @@ var format_subset_to_tablerows = function(format) {
   for (var i=0; i < keys.length; i++) {
     key = keys[i]
 
-    if (keys_whitelist.indexOf(key) >= 0)
+    if ((keys_whitelist.indexOf(key) >= 0) && format[key])
       rows.push([key, format[key]])
   }
 
@@ -818,21 +466,60 @@ var rewrite_page_dom = function(formats) {
   }
 }
 
+// ----------------------------------------------------------------------------- data structure
+
+var mime_filetype_regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
+
+var normalize_formats = function(formats) {
+  return formats
+    .filter(function(format) {return !!format && (typeof format === 'object') && format.url && format.mimeType})
+    .map(function(format) {
+      if (format.isHLS) {
+        format.mimeType = 'application/x-mpegurl'
+        format.url += '#video.m3u8'
+      }
+      else if (format.isDashMPD) {
+        format.mimeType = 'application/dash+xml'
+        format.url += '#video.mpd'
+      }
+      else {
+        format.mimeType = format.mimeType.split(';')[0].trim()
+
+        if (mime_filetype_regex.test(format.mimeType)) {
+          format.url += '#file.' + format.mimeType.replace(mime_filetype_regex, '$1')
+        }
+      }
+      return format
+    })
+    .sort(function(a,b) {
+      // sort formats by bitrate in decreasing order
+      return (a.bitrate < b.bitrate)
+        ? 1 : (a.bitrate === b.bitrate)
+        ?  0 : -1
+    })
+}
+
 // ----------------------------------------------------------------------------- bootstrap
 
 var init = function() {
-  get_tokens(function() {
-    if (!state.tokens) return
+  window.ytdl.getInfo(window.location.href)
+  .then(function(info) {
+    if (!info || !info.formats || !info.formats.length) return
 
-    get_media_formats(function(formats) {
-      if (!formats) return
+    var formats = normalize_formats(info.formats)
+    info = null
 
-      add_default_trusted_type_policy()
-      rewrite_page_dom(formats)
-    })
+    add_default_trusted_type_policy()
+    rewrite_page_dom(formats)
+  })
+  .catch(function(error) {
+    console.log(error.message)
   })
 }
 
-init()
+if (window.ytdl) {
+  addMissingGlobals()
+  init()
+}
 
 // -----------------------------------------------------------------------------
