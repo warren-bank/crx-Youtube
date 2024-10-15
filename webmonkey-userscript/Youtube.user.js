@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      2.0.1
+// @version      2.0.2
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -23,6 +23,7 @@
 // ----------------------------------------------------------------------------- constants
 
 const user_options = {
+  "show_media_formats_button":     true,
   "redirect_to_webcast_reloaded":  true,
   "force_http":                    true,
   "force_https":                   false
@@ -47,6 +48,12 @@ const constants = {
   "img_urls": {
     "base_webcast_reloaded_icons": "https://github.com/warren-bank/crx-webcast-reloaded/raw/gh-pages/chrome_extension/2-release/popup/img/"
   }
+}
+
+// ----------------------------------------------------------------------------- state
+
+const state = {
+  formats: null
 }
 
 // ----------------------------------------------------------------------------- CSP
@@ -204,6 +211,29 @@ const process_video_url = (video_url, video_type, vtt_url, referer_url) => {
   }
 }
 
+// ----------------------------------------------------------------------------- display interstitial button
+
+const add_media_formats_button = () => {
+  const button = make_element('button', '<span>Show Media Formats</span>')
+
+  button.style.position = 'fixed'
+  button.style.top = '10px'
+  button.style.right = '10px'
+  button.style.zIndex = '9999'
+  button.style.backgroundColor = '#065fd4'
+  button.style.color = '#fff'
+  button.style.padding = '10px 15px'
+  button.style.borderRadius = '18px'
+  button.style.borderStyle = 'none'
+  button.style.outline = 'none'
+  button.style.fontWeight = 'bold'
+  button.style.cursor = 'pointer'
+
+  button.addEventListener('click', rewrite_page_dom)
+
+  document.body.appendChild(button)
+}
+
 // ----------------------------------------------------------------------------- display results
 
 const format_subset_to_tablerows = (format) => {
@@ -267,7 +297,7 @@ const insert_webcast_reloaded_div_to_listitem = (li, format) => {
   insert_webcast_reloaded_div(block_element, video_url, vtt_url, referer_url)
 }
 
-const rewrite_page_dom = (formats) => {
+const rewrite_page_dom = () => {
   const head  = unsafeWindow.document.getElementsByTagName('head')[0]
   const body  = unsafeWindow.document.body
   const title = unsafeWindow.document.title
@@ -432,7 +462,7 @@ const rewrite_page_dom = (formats) => {
   const ul = body.querySelector('ul')
   if (!ul) return
 
-  for (let format of formats) {
+  for (let format of state.formats) {
     const li = format_to_listitem(format)
     ul.appendChild(li)
     attach_button_event_handlers_to_listitem(li, format)
@@ -479,11 +509,15 @@ const init = async () => {
   let info = await window.ytdl.getInfo(window.location.href)
   if (!info || !info.formats || !info.formats.length) return
 
-  const formats = normalize_formats(info.formats)
+  state.formats = normalize_formats(info.formats)
   info = null
 
   add_default_trusted_type_policy()
-  rewrite_page_dom(formats)
+
+  if (user_options.show_media_formats_button)
+    add_media_formats_button()
+  else
+    rewrite_page_dom()
 }
 
 if (window.ytdl) {
