@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      3.2.0
+// @version      3.2.1
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -503,15 +503,28 @@ const validate_format = (format, callback) => {
     return
   }
 
-  const http = new XMLHttpRequest()
-  http.open('HEAD', format.url)
-  http.onreadystatechange = function() {
-    if (this.readyState == this.DONE) {
-      format.urlStatus = this.status
-      callback()
+  let did_callback = false
+  const do_callback = function() {
+    if (did_callback) return
+
+    did_callback = true
+    callback()
+  }
+
+  const xhr = new XMLHttpRequest()
+  xhr.open('HEAD', format.url, true)
+  xhr.timeout = 5000
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState === XMLHttpRequest.DONE) {
+      format.urlStatus = xhr.status || 0
+      do_callback()
     }
   }
-  http.send()
+  xhr.ontimeout = xhr.onerror = xhr.onabort = function() {
+    format.urlStatus = format.urlStatus || 0
+    do_callback()
+  }
+  xhr.send()
 }
 
 const validate_formats = (callback) => {
