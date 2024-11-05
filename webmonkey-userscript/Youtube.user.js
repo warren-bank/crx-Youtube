@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      2.0.1
+// @version      2.0.2
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -24,6 +24,7 @@
 // ----------------------------------------------------------------------------- constants
 
 var user_options = {
+  "show_media_formats_button":     true,
   "redirect_to_webcast_reloaded":  true,
   "force_http":                    true,
   "force_https":                   false
@@ -48,6 +49,12 @@ var constants = {
   "img_urls": {
     "base_webcast_reloaded_icons": "https://github.com/warren-bank/crx-webcast-reloaded/raw/gh-pages/chrome_extension/2-release/popup/img/"
   }
+}
+
+// ----------------------------------------------------------------------------- state
+
+var state = {
+  formats: null
 }
 
 // ----------------------------------------------------------------------------- ES6 polyfills
@@ -223,6 +230,29 @@ var process_video_url = function(video_url, video_type, vtt_url, referer_url) {
   }
 }
 
+// ----------------------------------------------------------------------------- display interstitial button
+
+var add_media_formats_button = function() {
+  var button = make_element('button', '<span>Show Media Formats</span>')
+
+  button.style.position = 'fixed'
+  button.style.top = '10px'
+  button.style.right = '10px'
+  button.style.zIndex = '9999'
+  button.style.backgroundColor = '#065fd4'
+  button.style.color = '#fff'
+  button.style.padding = '10px 15px'
+  button.style.borderRadius = '18px'
+  button.style.borderStyle = 'none'
+  button.style.outline = 'none'
+  button.style.fontWeight = 'bold'
+  button.style.cursor = 'pointer'
+
+  button.addEventListener('click', rewrite_page_dom)
+
+  document.body.appendChild(button)
+}
+
 // ----------------------------------------------------------------------------- display results
 
 var format_subset_to_tablerows = function(format) {
@@ -290,7 +320,7 @@ var insert_webcast_reloaded_div_to_listitem = function(li, format) {
   insert_webcast_reloaded_div(block_element, video_url, vtt_url, referer_url)
 }
 
-var rewrite_page_dom = function(formats) {
+var rewrite_page_dom = function() {
   var head  = unsafeWindow.document.getElementsByTagName('head')[0]
   var body  = unsafeWindow.document.body
   var title = unsafeWindow.document.title
@@ -456,8 +486,8 @@ var rewrite_page_dom = function(formats) {
   if (!ul) return
 
   var format, li
-  for (var i=0; i < formats.length; i++) {
-    format = formats[i]
+  for (var i=0; i < state.formats.length; i++) {
+    format = state.formats[i]
     li     = format_to_listitem(format)
 
     ul.appendChild(li)
@@ -508,11 +538,15 @@ var init = function() {
   .then(function(info) {
     if (!info || !info.formats || !info.formats.length) return
 
-    var formats = normalize_formats(info.formats)
+    state.formats = normalize_formats(info.formats)
     info = null
 
     add_default_trusted_type_policy()
-    rewrite_page_dom(formats)
+
+    if (user_options.show_media_formats_button)
+      add_media_formats_button()
+    else
+      rewrite_page_dom()
   })
   .catch(function(error) {
     console.log(error.message)
