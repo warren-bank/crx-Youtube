@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      3.0.0
+// @version      3.1.0
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -501,34 +501,82 @@ const rewrite_page_dom = () => {
 
 const mime_filetype_regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
 
-const normalize_formats = (formats) => formats
-  .filter(format => !!format && (typeof format === 'object') && format.url && format.mimeType)
-  .map(format => {
-    if (format.isHLS) {
-      format.mimeType = 'application/x-mpegurl'
-      format.url += '#video.m3u8'
-    }
-    else if (format.isDashMPD) {
-      format.mimeType = 'application/dash+xml'
-      format.url += '#video.mpd'
-    }
-    else {
-      format.mimeType = format.mimeType.split(';')[0].trim()
+const normalize_formats = () => {
+  if (!state.formats || !state.formats.length) return
 
-      if (!format.container && mime_filetype_regex.test(format.mimeType))
-        format.container = format.mimeType.replace(mime_filetype_regex, '$1')
+  state.formats = state.formats
+    .filter(format => !!format && (typeof format === 'object') && format.url && format.mimeType)
+    .map(format => {
+      if (format.isHLS) {
+        format.mimeType = 'application/x-mpegurl'
+        format.url += '#video.m3u8'
+      }
+      else if (format.isDashMPD) {
+        format.mimeType = 'application/dash+xml'
+        format.url += '#video.mpd'
+      }
+      else {
+        format.mimeType = format.mimeType.split(';')[0].trim()
 
-      if (format.container)
-        format.url += '#file.' + format.container
+        if (!format.container && mime_filetype_regex.test(format.mimeType))
+          format.container = format.mimeType.replace(mime_filetype_regex, '$1')
+
+        if (format.container)
+          format.url += '#file.' + format.container
+      }
+      return format
+    })
+    .sort((a,b) => {
+      // sort formats by bitrate in decreasing order
+      return (a.bitrate < b.bitrate)
+        ? 1 : (a.bitrate === b.bitrate)
+        ?  0 : -1
+    })
+}
+
+// ----------------------------------------------------------------------------- data structure validation
+
+const validate_format = (format, callback) => {
+  if (!format || !format.url) {
+    callback()
+    return
+  }
+
+  const http = new XMLHttpRequest()
+  http.open('HEAD', format.url)
+  http.onreadystatechange = function() {
+    if (this.readyState == this.DONE) {
+      format.urlStatus = this.status
+      callback()
     }
-    return format
-  })
-  .sort((a,b) => {
-    // sort formats by bitrate in decreasing order
-    return (a.bitrate < b.bitrate)
-      ? 1 : (a.bitrate === b.bitrate)
-      ?  0 : -1
-  })
+  }
+  http.send()
+}
+
+const validate_formats = (callback) => {
+  if (!state.formats || !state.formats.length) {
+    callback()
+    return
+  }
+
+  let done_counter = 0
+  const cb = () => {
+    done_counter++
+
+    if (done_counter === state.formats.length) {
+      state.formats = state.formats.filter(format => (format.urlStatus >= 200) && (format.urlStatus < 300))
+      callback()
+    }
+  }
+
+  for (let format of state.formats) {
+    validate_format(format, cb)
+  }
+}
+
+const validate_formats_async = () => new Promise(resolve => {
+  validate_formats(resolve)
+})
 
 // ----------------------------------------------------------------------------- bootstrap
 
@@ -547,8 +595,12 @@ const init = async () => {
   let info = await ytdl.getFullInfo(window.location.href)
   if (!info || !info.formats || !info.formats.length) return
 
-  state.formats = normalize_formats(info.formats)
+  state.formats = info.formats
   info = null
+
+  // important: perform validation BEFORE normalization
+  await validate_formats_async()
+  normalize_formats()
 
   if (user_options.show_media_formats_button)
     add_media_formats_button()
