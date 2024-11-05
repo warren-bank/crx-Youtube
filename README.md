@@ -2,7 +2,9 @@
 
 [Userscript](https://github.com/warren-bank/crx-Youtube/raw/webmonkey-userscript/es6/webmonkey-userscript/Youtube.user.js) for [youtube.com](https://youtube.com/) to run in both:
 * the [WebMonkey](https://github.com/warren-bank/Android-WebMonkey) application for Android
-* the [Tampermonkey](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo) web browser extension for Chrome/Chromium
+* the [Tampermonkey](https://www.tampermonkey.net/) web browser extension
+  - for [Chrome/Chromium](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+  - for [Firefox/Fenix](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/)
 
 Its purpose is to:
 * on a page for a video:

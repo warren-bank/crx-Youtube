@@ -1,14 +1,14 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      2.0.3
+// @version      3.0.0
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
 // @icon         https://www.youtube.com/favicon.ico
-// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@4.14.4-distubejs.4/dist/es2020/ytdl-core.js
+// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@6.0.5-ybd-project.1/dist/es2020/ytdl-core.js
 // @run-at       document_end
 // @grant        unsafeWindow
 // @homepage     https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es6
@@ -237,13 +237,40 @@ const add_media_formats_button = () => {
 // ----------------------------------------------------------------------------- display results
 
 const format_subset_to_tablerows = (format) => {
-  const keys_whitelist = ["mimeType", "codecs", "bitrate", "qualityLabel", "audioSampleRate"]
   const rows = []
 
-  for (let key in format) {
-    if ((keys_whitelist.indexOf(key) >= 0) && format[key])
-      rows.push([key, format[key]])
+  if (format.mimeType)
+    rows.push(['mime type', format.mimeType])
+  if (format.bitrate) {
+    let value = Math.floor(format.bitrate / 1000) + ' kbps'
+
+    rows.push(['bitrate', value])
   }
+  if (format.hasAudio && format.audioBitrate) {
+    let value = format.audioBitrate + ' kbps'
+
+    if (format.bitrate) {
+      if (format.hasVideo)
+        rows.push(['audio bitrate', value])
+      else
+        rows[rows.length - 1][1] = value
+    }
+    else {
+      rows.push(['bitrate', value])
+    }
+  }
+  if (format.hasVideo) {
+    if (format.quality && format.quality.label)
+      rows.push(['video quality', format.quality.label])
+    if (format.codec && format.codec.video)
+      rows.push(['video codec', format.codec.video])
+  }
+  if (format.hasAudio) {
+    if (format.codec && format.codec.audio)
+      rows.push(['audio codec', format.codec.audio])
+  }
+  if (format.sourceClientName)
+    rows.push(['client', format.sourceClientName])
 
   return rows.length
     ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
@@ -506,13 +533,22 @@ const normalize_formats = (formats) => formats
 // ----------------------------------------------------------------------------- bootstrap
 
 const init = async () => {
-  let info = await window.ytdl.getInfo(window.location.href)
+  add_default_trusted_type_policy()
+
+  const ytdl = new window.Ytdl.YtdlCore({
+    logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
+    disableInitialSetup: false,
+    disableBasicCache: true,
+    disableFileCache: true,
+    disablePoTokenAutoGeneration: true,
+    noUpdate: true
+  })
+
+  let info = await ytdl.getFullInfo(window.location.href)
   if (!info || !info.formats || !info.formats.length) return
 
   state.formats = normalize_formats(info.formats)
   info = null
-
-  add_default_trusted_type_policy()
 
   if (user_options.show_media_formats_button)
     add_media_formats_button()
@@ -520,7 +556,7 @@ const init = async () => {
     rewrite_page_dom()
 }
 
-if (window.ytdl) {
+if (window.Ytdl && window.Ytdl.YtdlCore) {
   init()
 }
 
