@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      3.1.0
+// @version      3.2.0
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -269,8 +269,6 @@ const format_subset_to_tablerows = (format) => {
     if (format.codec && format.codec.audio)
       rows.push(['audio codec', format.codec.audio])
   }
-  if (format.sourceClientName)
-    rows.push(['client', format.sourceClientName])
 
   return rows.length
     ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
@@ -497,44 +495,7 @@ const rewrite_page_dom = () => {
   }
 }
 
-// ----------------------------------------------------------------------------- data structure
-
-const mime_filetype_regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
-
-const normalize_formats = () => {
-  if (!state.formats || !state.formats.length) return
-
-  state.formats = state.formats
-    .filter(format => !!format && (typeof format === 'object') && format.url && format.mimeType)
-    .map(format => {
-      if (format.isHLS) {
-        format.mimeType = 'application/x-mpegurl'
-        format.url += '#video.m3u8'
-      }
-      else if (format.isDashMPD) {
-        format.mimeType = 'application/dash+xml'
-        format.url += '#video.mpd'
-      }
-      else {
-        format.mimeType = format.mimeType.split(';')[0].trim()
-
-        if (!format.container && mime_filetype_regex.test(format.mimeType))
-          format.container = format.mimeType.replace(mime_filetype_regex, '$1')
-
-        if (format.container)
-          format.url += '#file.' + format.container
-      }
-      return format
-    })
-    .sort((a,b) => {
-      // sort formats by bitrate in decreasing order
-      return (a.bitrate < b.bitrate)
-        ? 1 : (a.bitrate === b.bitrate)
-        ?  0 : -1
-    })
-}
-
-// ----------------------------------------------------------------------------- data structure validation
+// ----------------------------------------------------------------------------- format data structure: validation
 
 const validate_format = (format, callback) => {
   if (!format || !format.url) {
@@ -578,6 +539,62 @@ const validate_formats_async = () => new Promise(resolve => {
   validate_formats(resolve)
 })
 
+// ----------------------------------------------------------------------------- format data structure: normalization
+
+const mime_filetype_regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
+
+const normalize_formats = () => {
+  if (!state.formats || !state.formats.length) return
+
+  state.formats = state.formats
+    .filter(format => !!format && (typeof format === 'object') && format.url && format.mimeType)
+    .map(format => {
+      if (format.isHLS) {
+        format.mimeType = 'application/x-mpegurl'
+        format.url += '#video.m3u8'
+      }
+      else if (format.isDashMPD) {
+        format.mimeType = 'application/dash+xml'
+        format.url += '#video.mpd'
+      }
+      else {
+        format.mimeType = format.mimeType.split(';')[0].trim()
+
+        if (!format.container && mime_filetype_regex.test(format.mimeType))
+          format.container = format.mimeType.replace(mime_filetype_regex, '$1')
+
+        if (format.container)
+          format.url += '#file.' + format.container
+      }
+      return format
+    })
+    .sort((a,b) => {
+      // sort formats by bitrate in decreasing order
+      return (a.bitrate < b.bitrate)
+        ? 1 : (a.bitrate === b.bitrate)
+        ?  0 : -1
+    })
+}
+
+// ----------------------------------------------------------------------------- format data structure: remove duplicates
+
+const dedupe_formats = () => {
+  if (!state.formats || !state.formats.length) return
+
+  let previous_itag = null
+
+  state.formats = state.formats
+    .filter(format => {
+      if (format.itag) {
+        if (format.itag === previous_itag) {
+          return false
+        }
+        previous_itag = format.itag
+      }
+      return true
+    })
+}
+
 // ----------------------------------------------------------------------------- bootstrap
 
 const init = async () => {
@@ -599,8 +616,10 @@ const init = async () => {
   info = null
 
   // important: perform validation BEFORE normalization
+  // important: perform normalization BEFORE removing duplicates
   await validate_formats_async()
   normalize_formats()
+  dedupe_formats()
 
   if (user_options.show_media_formats_button)
     add_media_formats_button()
