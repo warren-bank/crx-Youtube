@@ -19,6 +19,17 @@ Its purpose is to:
         * [_ExoAirPlayer_](https://github.com/warren-bank/Android-ExoPlayer-AirPlay-Receiver)
         * [_HLS-Proxy_](https://github.com/warren-bank/HLS-Proxy)
 
+#### Important:
+
+* does not currently work when the `User-Agent` request header self-identifies as a mobile device
+  - which causes _Youtube_ to redirect from `www.youtube.com` to `m.youtube.com`
+  - in _Fenix_:
+    * open: main menu
+    * select: "Desktop site"
+  - in _WebMonkey_:
+    * open: main menu &gt; _Settings_ &gt; _User Agent_
+    * select either: "Chrome 120, Windows 10", or "Custom User Agent"
+
 #### Legal:
 
 * copyright: [Warren Bank](https://github.com/warren-bank)
