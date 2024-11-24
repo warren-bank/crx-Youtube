@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      3.2.1
+// @version      3.2.2
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://youtube.com/watch?v=*
 // @match        *://youtube.com/embed/*
@@ -31,6 +31,7 @@ const user_options = {
 
 const strings = {
   "buttons": {
+    "show_media_formats":          "Show Media Formats",
     "start_media":                 "Start Media",
     "show_details":                "Show Details"
   }
@@ -214,12 +215,8 @@ const process_video_url = (video_url, video_type, vtt_url, referer_url) => {
 // ----------------------------------------------------------------------------- display interstitial button
 
 const add_media_formats_button = () => {
-  const button = make_element('button', '<span>Show Media Formats</span>')
+  const button = make_element('button', `<span>${strings.buttons.show_media_formats}</span>`)
 
-  button.style.position = 'fixed'
-  button.style.top = '10px'
-  button.style.right = '10px'
-  button.style.zIndex = '9999'
   button.style.backgroundColor = '#065fd4'
   button.style.color = '#fff'
   button.style.padding = '10px 15px'
@@ -231,7 +228,22 @@ const add_media_formats_button = () => {
 
   button.addEventListener('click', rewrite_page_dom)
 
-  document.body.appendChild(button)
+  const container = document.querySelector('div#owner > div#subscribe-button')
+  if (container) {
+    // DOM assertion passes
+    button.style.margin = '0 0 0 10px'
+
+    container.parentElement.appendChild(button)
+  }
+  else {
+    // fallback
+    button.style.position = 'fixed'
+    button.style.top = '10px'
+    button.style.right = '10px'
+    button.style.zIndex = '9999'
+
+    document.body.appendChild(button)
+  }
 }
 
 // ----------------------------------------------------------------------------- display results
