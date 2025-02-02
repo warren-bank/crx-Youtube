@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      4.0.0
+// @version      4.0.1
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
 // @icon         https://www.youtube.com/favicon.ico
-// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@6.0.8-ybd-project.1/dist/es2020/ytdl-core.js
+// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@4.16.0-distubejs.1/dist/es2020/ytdl-core.js
 // @run-at       document_end
 // @grant        unsafeWindow
 // @homepage     https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es6
@@ -67,6 +67,7 @@ const constants = {
 // ----------------------------------------------------------------------------- state
 
 const state = {
+  library: null,
   formats: null
 }
 
@@ -434,7 +435,7 @@ const format_to_listitem = (format) => {
   return make_element('li', inner_html.join("\n"))
 }
 
-const format_subset_to_tablerows = (format) => {
+const format_subset_to_tablerows__ybd_project = (format) => {
   const rows = []
 
   if (format.mimeType)
@@ -472,6 +473,25 @@ const format_subset_to_tablerows = (format) => {
     ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
     : ''
 }
+
+const format_subset_to_tablerows__distubejs = (format) => {
+  const keys_whitelist = ["mimeType", "codecs", "bitrate", "qualityLabel", "audioSampleRate"]
+  const keys = Object.keys(format)
+  const rows = []
+
+  for (let key of keys) {
+    if ((keys_whitelist.indexOf(key) >= 0) && format[key])
+      rows.push([key, format[key]])
+  }
+
+  return rows.length
+    ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
+    : ''
+}
+
+const format_subset_to_tablerows = (state.library === 'ybd-project')
+  ? format_subset_to_tablerows__ybd_project
+  : format_subset_to_tablerows__distubejs
 
 // -----------------------------------------------------------------------------
 
@@ -751,16 +771,23 @@ const page_init = () => {
   add_default_trusted_type_policy()
 
   add_userscripts_row_container(async () => {
-    const ytdl = new window.Ytdl.YtdlCore({
-      logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
-      disableInitialSetup: false,
-      disableBasicCache: true,
-      disableFileCache: true,
-      disablePoTokenAutoGeneration: true,
-      noUpdate: true
-    })
-
-    let info = await ytdl.getFullInfo(window.location.href)
+    let info
+    if (window.Ytdl && window.Ytdl.YtdlCore) {
+      state.library = 'ybd-project'
+      const ytdl = new window.Ytdl.YtdlCore({
+        logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
+        disableInitialSetup: false,
+        disableBasicCache: true,
+        disableFileCache: true,
+        disablePoTokenAutoGeneration: true,
+        noUpdate: true
+      })
+      info = await ytdl.getFullInfo(window.location.href)
+    }
+    else if (window.ytdl) {
+      state.library = 'distubejs'
+      info = await window.ytdl.getInfo(window.location.href)
+    }
     if (!info || !info.formats || !info.formats.length) return
 
     state.formats = info.formats
@@ -779,8 +806,6 @@ const page_init = () => {
   })
 }
 
-if (window.Ytdl && window.Ytdl.YtdlCore) {
-  page_init()
-}
+page_init()
 
 // -----------------------------------------------------------------------------
