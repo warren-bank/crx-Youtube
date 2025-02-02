@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      3.0.0
+// @version      3.0.1
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
 // @icon         https://www.youtube.com/favicon.ico
 // @require      https://cdn.jsdelivr.net/npm/@warren-bank/url@3.2.1/es5-browser/jsURL.js
-// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@4.14.4-distubejs.4/dist/es5/ytdl-core.js
+// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@4.16.0-distubejs.1/dist/es5/ytdl-core.js
 // @run-at       document_end
 // @grant        unsafeWindow
 // @homepage     https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es5
