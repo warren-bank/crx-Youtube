@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      4.0.2
+// @version      4.0.3
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
@@ -441,7 +441,7 @@ const format_to_listitem = (format) => {
   return make_element('li', inner_html.join("\n"))
 }
 
-const format_subset_to_tablerows__ybd_project = (format) => {
+const format_subset_to_tablerows = (format) => {
   const rows = []
 
   if (format.mimeType)
@@ -465,39 +465,28 @@ const format_subset_to_tablerows__ybd_project = (format) => {
     }
   }
   if (format.hasVideo) {
-    if (format.quality && format.quality.label)
-      rows.push(['video quality', format.quality.label])
-    if (format.codec && format.codec.video)
-      rows.push(['video codec', format.codec.video])
+    if (format.qualityLabel || format.quality)
+      rows.push(['video quality', format.qualityLabel || format.quality])
+    if (format.videoCodec)
+      rows.push(['video codec', format.videoCodec])
   }
   if (format.hasAudio) {
-    if (format.codec && format.codec.audio)
-      rows.push(['audio codec', format.codec.audio])
+    if (format.audioCodec)
+      rows.push(['audio codec', format.audioCodec])
+    if (format.audioSampleRate) {
+      let value = parseInt(format.audioSampleRate, 10)
+      if (value && !isNaN(value)) {
+        value = Math.floor(value / 1000) + ' kHz'
+
+        rows.push(['audio sample rate', value])
+      }
+    }
   }
 
   return rows.length
     ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
     : ''
 }
-
-const format_subset_to_tablerows__distubejs = (format) => {
-  const keys_whitelist = ["mimeType", "codecs", "bitrate", "qualityLabel", "audioSampleRate"]
-  const keys = Object.keys(format)
-  const rows = []
-
-  for (let key of keys) {
-    if ((keys_whitelist.indexOf(key) >= 0) && format[key])
-      rows.push([key, format[key]])
-  }
-
-  return rows.length
-    ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
-    : ''
-}
-
-const format_subset_to_tablerows = (state.library === 'ybd-project')
-  ? format_subset_to_tablerows__ybd_project
-  : format_subset_to_tablerows__distubejs
 
 // -----------------------------------------------------------------------------
 
@@ -718,30 +707,78 @@ const validate_formats_async = () => new Promise(resolve => {
 
 const mime_filetype_regex = /^(?:audio|video)\/([^;]+)(?:;.*)?$/
 
+const copy_format_keys = (src, dst, keys) => {
+  for (let key of keys) {
+    dst[key] = src[key]
+  }
+}
+
 const normalize_formats = () => {
   if (!state.formats || !state.formats.length) return
 
   state.formats = state.formats
     .filter(format => !!format && (typeof format === 'object') && format.url && format.mimeType)
-    .map(format => {
-      if (format.isHLS) {
-        format.mimeType = 'application/x-mpegurl'
-        format.url += '#video.m3u8'
+    .map(old_format => {
+      const new_format = {}
+
+      copy_format_keys(old_format, new_format, [
+        'audioBitrate',
+        'bitrate',
+        'container',
+        'hasAudio',
+        'hasVideo',
+        'isDashMPD',
+        'isHLS',
+        'itag',
+        'mimeType',
+        'url'
+      ])
+
+      if (new_format.isHLS) {
+        new_format.mimeType = 'application/x-mpegurl'
+        new_format.url += '#video.m3u8'
       }
-      else if (format.isDashMPD) {
-        format.mimeType = 'application/dash+xml'
-        format.url += '#video.mpd'
+      else if (new_format.isDashMPD) {
+        new_format.mimeType = 'application/dash+xml'
+        new_format.url += '#video.mpd'
       }
       else {
-        format.mimeType = format.mimeType.split(';')[0].trim()
+        new_format.mimeType = new_format.mimeType.split(';')[0].trim()
 
-        if (!format.container && mime_filetype_regex.test(format.mimeType))
-          format.container = format.mimeType.replace(mime_filetype_regex, '$1')
+        if (!new_format.container && mime_filetype_regex.test(new_format.mimeType))
+          new_format.container = new_format.mimeType.replace(mime_filetype_regex, '$1')
 
-        if (format.container)
-          format.url += '#file.' + format.container
+        if (new_format.container)
+          new_format.url += '#file.' + new_format.container
       }
-      return format
+
+      switch(state.library) {
+        case 'ybd-project': {
+            if (old_format.codec && (typeof old_format.codec === 'object')) {
+              new_format.audioCodec = old_format.codec.audio
+              new_format.videoCodec = old_format.codec.video
+            }
+
+            if (old_format.quality && (typeof old_format.quality === 'object')) {
+              new_format.qualityLabel = old_format.quality.label
+              new_format.quality      = old_format.quality.text
+            }
+          }
+          break
+
+        case 'distubejs': {
+            copy_format_keys(old_format, new_format, [
+              'audioSampleRate',
+              'audioCodec',
+              'videoCodec',
+              'qualityLabel',
+              'quality'
+            ])
+          }
+          break
+      }
+
+      return new_format
     })
     .sort((a,b) => {
       // sort formats by bitrate in decreasing order
