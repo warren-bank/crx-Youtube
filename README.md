@@ -1,13 +1,19 @@
 ### [Youtube](https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es5)
 
-[Userscript](https://github.com/warren-bank/crx-Youtube/raw/webmonkey-userscript/es5/webmonkey-userscript/Youtube.user.js) for [youtube.com](https://youtube.com/) to run in both:
-* the [WebMonkey](https://github.com/warren-bank/Android-WebMonkey) application for Android
-* the [Tampermonkey](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo) web browser extension for Chrome/Chromium
+[Userscript](https://github.com/warren-bank/crx-Youtube/raw/webmonkey-userscript/es5/webmonkey-userscript/Youtube.user.js) to run in:
+* the [WebMonkey](https://github.com/warren-bank/Android-WebMonkey) application
+  - for Android
+* the [Tampermonkey](https://www.tampermonkey.net/) web browser extension
+  - for [Firefox/Fenix](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/)
+  - for [Chrome/Chromium](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo)
+* the [Violentmonkey](https://violentmonkey.github.io/) web browser extension
+  - for [Firefox/Fenix](https://addons.mozilla.org/firefox/addon/violentmonkey/)
+  - for [Chrome/Chromium](https://chrome.google.com/webstore/detail/violent-monkey/jinjaccalgkegednnccohejagnlnfdag)
 
 Its purpose is to:
-* on a page for a video:
-  - replace the page's content with a list of all available media formats
-  - for each available media format, display:
+* on a [youtube.com](https://youtube.com/) page for a video:
+  - add a button to toggle the display of a list of all available media formats
+  - for each available media format, include:
     * a brief summary of its attributes
     * _Start Media_ button to transfer the chosen media to an external player
     * _Show Details_ button to expand a block of hidden text that contains all available technical details about the media format
@@ -16,6 +22,17 @@ Its purpose is to:
         * _Google Chromecast_
         * [_ExoAirPlayer_](https://github.com/warren-bank/Android-ExoPlayer-AirPlay-Receiver)
         * [_HLS-Proxy_](https://github.com/warren-bank/HLS-Proxy)
+
+#### Important:
+
+* does not currently work when the `User-Agent` request header self-identifies as a mobile device
+  - which causes _Youtube_ to redirect from `www.youtube.com` to `m.youtube.com`
+  - in _Fenix_:
+    * open: main menu
+    * select: "Desktop site"
+  - in _WebMonkey_:
+    * open: main menu &gt; _Settings_ &gt; _User Agent_
+    * select either: "Chrome 120, Windows 10", or "Custom User Agent"
 
 #### Legal:
 
