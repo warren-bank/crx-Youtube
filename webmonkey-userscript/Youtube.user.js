@@ -1,14 +1,12 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      3.2.2
+// @version      4.0.0
 // @match        *://youtube.googleapis.com/v/*
-// @match        *://youtube.com/watch?v=*
-// @match        *://youtube.com/embed/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
 // @icon         https://www.youtube.com/favicon.ico
-// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@6.0.5-ybd-project.1/dist/es2020/ytdl-core.js
+// @require      https://cdn.jsdelivr.net/npm/@warren-bank/browser-ytdl-core@6.0.8-ybd-project.1/dist/es2020/ytdl-core.js
 // @run-at       document_end
 // @grant        unsafeWindow
 // @homepage     https://github.com/warren-bank/crx-Youtube/tree/webmonkey-userscript/es6
@@ -20,34 +18,49 @@
 // @copyright    Warren Bank
 // ==/UserScript==
 
-// ----------------------------------------------------------------------------- constants
+// ----------------------------------------------------------------------------- config options
 
 const user_options = {
-  "show_media_formats_button":     true,
-  "redirect_to_webcast_reloaded":  true,
-  "force_http":                    true,
-  "force_https":                   false
+  "debug_verbosity": 0,  // 0 = silent. 1 = console log. 2 = window alert. 3 = window alert + conditional breakpoint.
+  "redirect_to_webcast_reloaded": true,
+  "force_http": true,
+  "force_https": false
 }
 
-const strings = {
-  "buttons": {
-    "show_media_formats":          "Show Media Formats",
-    "start_media":                 "Start Media",
-    "show_details":                "Show Details"
-  }
-}
+// ----------------------------------------------------------------------------- constants
 
 const constants = {
-  "dom_classes": {
-    "div_media_summary":           "media_summary",
-    "div_webcast_icons":           "icons-container",
-    "div_media_buttons":           "media_buttons",
-    "btn_start_media":             "start_media",
-    "btn_show_details":            "show_details",
-    "div_media_details":           "media_details"
+  query_selector: {
+    userscripts_row_container_parent: "div#above-the-fold",
+    userscripts_row_container_prev_sibling: "div#top-row"
   },
-  "img_urls": {
-    "base_webcast_reloaded_icons": "https://github.com/warren-bank/crx-webcast-reloaded/raw/gh-pages/chrome_extension/2-release/popup/img/"
+  element_id: {
+    userscripts_row_container: "userscripts-row",
+    media_formats_container: "media_formats_container"
+  },
+  button_text: {
+    show_media_formats: "Show Media Formats",
+    start_media: "Start Media",
+    show_details: "Show Details",
+    close_button: "X"
+  },
+  dom_classes: {
+    div_media_summary: "media_summary",
+    div_webcast_icons: "icons-container",
+    div_media_buttons: "media_buttons",
+    btn_start_media: "start_media",
+    btn_show_details: "show_details",
+    div_media_details: "media_details"
+  },
+  inline_css: {
+    userscripts_row_container: "position: relative; top: 0; left: 0; overflow: visible;",
+    media_formats_container: "display: block; position: absolute; top: 0px; left: 0px; z-index: 9999; background-color: white; padding: 2em; border: 1px solid #000; text-align: center;",
+    close_button: "display: block; position: absolute; top: -1em; right: -1em; z-index: 9999; width: 2em; height: 2em; padding: 0.5em; line-height: 1em; cursor: pointer;",
+    text_button: "background-color: #065fd4; color: #fff; padding: 10px 15px; border-radius: 18px; border-style: none; outline: none; font-weight: bold; cursor: pointer;",
+    div_media_formats: "text-align: left;"
+  },
+  img_urls: {
+    base_webcast_reloaded_icons: "https://github.com/warren-bank/crx-webcast-reloaded/raw/gh-pages/chrome_extension/2-release/popup/img/"
   }
 }
 
@@ -75,6 +88,30 @@ const add_default_trusted_type_policy = () => {
   }
 }
 
+// ----------------------------------------------------------------------------- debug logger
+
+const debug = (msg, breakpoint) => {
+  if (!user_options.debug_verbosity) return
+
+  if (msg) {
+    if (typeof msg !== 'string')
+      msg = JSON.stringify(msg, null, 2)
+
+    switch(user_options.debug_verbosity) {
+      case 1:
+        console.log(msg)
+        break
+      case 2:
+      case 3:
+        window.alert(msg)
+        break
+    }
+  }
+
+  if (breakpoint && (user_options.debug_verbosity > 2))
+    debugger;
+}
+
 // ----------------------------------------------------------------------------- helpers
 
 const make_element = (elementName, html) => {
@@ -84,6 +121,420 @@ const make_element = (elementName, html) => {
     el.innerHTML = html
 
   return el
+}
+
+const empty_element = (el, html) => {
+  while (el.childNodes.length)
+    el.removeChild(el.childNodes[0])
+
+  if (html)
+    el.innerHTML = html
+
+  return el
+}
+
+const cancel_event = (event) => {
+  event.stopPropagation();event.stopImmediatePropagation();event.preventDefault();event.returnValue=false;
+}
+
+// ----------------------------------------------------------------------------- DOM: container element for userscripts UI
+
+const add_userscripts_row_container = (callback) => {
+  const prev_sibling = unsafeWindow.document.querySelector(
+    `${constants.query_selector.userscripts_row_container_parent} > ${constants.query_selector.userscripts_row_container_prev_sibling}`
+  )
+  if (!prev_sibling) {
+    setTimeout(
+      function() {
+        add_userscripts_row_container(callback)
+      },
+      1000
+    )
+    return
+  }
+  // DOM is ready
+
+  let userscripts_row_container = get_userscripts_row_container()
+  if (userscripts_row_container) {
+    // container has already been added to DOM (by another userscript with common UI)
+    callback()
+    return
+  }
+
+  userscripts_row_container = make_element('div')
+  userscripts_row_container.setAttribute('id',    constants.element_id.userscripts_row_container)
+  userscripts_row_container.setAttribute('style', constants.inline_css.userscripts_row_container)
+
+  if (prev_sibling.nextSibling) {
+    prev_sibling.parentNode.insertBefore(userscripts_row_container, prev_sibling.nextSibling)
+  }
+  else {
+    prev_sibling.parentNode.appendChild(userscripts_row_container)
+  }
+  callback()
+}
+
+const get_userscripts_row_container = () => unsafeWindow.document.querySelector(`${constants.query_selector.userscripts_row_container_parent} > div#${constants.element_id.userscripts_row_container}`)
+
+// ----------------------------------------------------------------------------- DOM: container element for media formats
+
+const add_media_formats_container = () => {
+  const userscripts_row_container = get_userscripts_row_container()
+  const max_width = userscripts_row_container.parentElement.clientWidth
+  const min_width = Math.floor(max_width / 4)
+
+  const media_formats_container = make_element('div', `
+    <button style="${constants.inline_css.close_button}">
+      <span>${constants.button_text.close_button}</span>
+    </button>
+    <div></div>
+  `)
+  media_formats_container.setAttribute('id',    constants.element_id.media_formats_container)
+  media_formats_container.setAttribute('style', constants.inline_css.media_formats_container + ` max-width: ${max_width}px; min-width: ${min_width}px;`)
+  media_formats_container.querySelector('button').addEventListener('click', hide_media_formats_container.bind(null, media_formats_container))
+
+  if (userscripts_row_container.childNodes.length) {
+    userscripts_row_container.insertBefore(media_formats_container, userscripts_row_container.childNodes[0])
+  }
+  else {
+    userscripts_row_container.appendChild(media_formats_container)
+  }
+
+  return media_formats_container
+}
+
+const get_media_formats_container = () => unsafeWindow.document.getElementById(constants.element_id.media_formats_container) || add_media_formats_container()
+
+const hide_media_formats_container = (media_formats_container) => {
+  if (!media_formats_container)
+    media_formats_container = get_media_formats_container()
+
+  media_formats_container.style.display = 'none'
+}
+
+const show_media_formats_container = (media_formats_container) => {
+  if (!media_formats_container)
+    media_formats_container = get_media_formats_container()
+
+  media_formats_container.style.display = 'block'
+}
+
+const update_media_formats_container = (media_formats_container, html) => {
+  if (!media_formats_container)
+    media_formats_container = get_media_formats_container()
+
+  const inner_div = media_formats_container.querySelector(':scope > div')
+  if (inner_div)
+    empty_element(inner_div, html)
+}
+
+// ----------------------------------------------------------------------------- DOM: button to display media formats
+
+const add_show_media_formats_button = () => {
+  const userscripts_row_container = get_userscripts_row_container()
+
+  const show_media_formats_button = make_element('button', `<span>${constants.button_text.show_media_formats}</span>`)
+  show_media_formats_button.setAttribute('style', constants.inline_css.text_button)
+  show_media_formats_button.addEventListener('click', show_media_formats)
+
+  userscripts_row_container.appendChild(show_media_formats_button)
+}
+
+// ----------------------------------------------------------------------------- DOM: media formats
+
+const show_media_formats = (event) => {
+  cancel_event(event)
+
+  const media_formats_container = get_media_formats_container()
+  hide_media_formats_container(media_formats_container)
+
+  const css_prefix = `#${constants.element_id.media_formats_container} > div`
+
+  let html = [
+    '<style>',
+
+    css_prefix + ' {',
+    '  ' + constants.inline_css.div_media_formats,
+    '}',
+
+    css_prefix + ' > h2 {',
+    '  text-align: center;',
+    '  margin: 0.5em 0;',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_summary {',
+    '}',
+    css_prefix + ' > ul > li > div.media_summary > table {',
+    '  border-collapse: collapse;',
+    '}',
+    css_prefix + ' > ul > li > div.media_summary > table td {',
+    '  border: 1px solid #999;',
+    '  padding: 0.5em;',
+    '}',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container {',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_buttons {',
+    '}',
+    css_prefix + ' > ul > li > div.media_buttons > button.start_media {',
+    '}',
+    css_prefix + ' > ul > li > div.media_buttons > button.show_details {',
+    '  margin-left: 0.5em;',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_details {',
+    '}',
+    css_prefix + ' > ul > li > div.media_details > pre {',
+    '  background-color: #eee;',
+    '  padding: 0.5em;',
+    '}',
+
+    // --------------------------------------------------- CSS: reset
+
+    css_prefix + ',',
+    css_prefix + ' td {',
+    '  font-size: 18px;',
+    '}',
+
+    css_prefix + ' h2 {',
+    '  font-size: 24px;',
+    '}',
+
+    css_prefix + ' button {',
+    '  font-size: 16px;',
+    '}',
+
+    css_prefix + ' pre {',
+    '  font-size: 14px;',
+    '}',
+
+    // --------------------------------------------------- CSS: separation between media formats
+
+    css_prefix + ' > ul {',
+    '  list-style: none;',
+    '  margin: 0;',
+    '  padding: 0;',
+    '}',
+
+    css_prefix + ' > ul > li {',
+    '  list-style: none;',
+    '  margin-top: 0.5em;',
+    '  border-top: 1px solid #999;',
+    '  padding-top: 0.5em;',
+    '}',
+
+    css_prefix + ' > ul > li > div {',
+    '  margin-top: 0.5em;',
+    '}',
+
+    // --------------------------------------------------- CSS: links to tools on Webcast Reloaded website
+
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container {',
+    '  display: block;',
+    '  position: relative;',
+    '  z-index: 1;',
+    '  float: right;',
+    '  margin: 0.5em;',
+    '  width: 60px;',
+    '  height: 60px;',
+    '  max-height: 60px;',
+    '  vertical-align: top;',
+    '  background-color: #d7ecf5;',
+    '  border: 1px solid #000;',
+    '  border-radius: 14px;',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.chromecast,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.chromecast > img,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.airplay,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.airplay > img,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.proxy,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.proxy > img,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.video-link,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.video-link > img {',
+    '  display: block;',
+    '  width: 25px;',
+    '  height: 25px;',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.chromecast,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.airplay,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.proxy,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.video-link {',
+    '  position: absolute;',
+    '  z-index: 1;',
+    '  text-decoration: none;',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.chromecast,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.airplay {',
+    '  top: 0;',
+    '}',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.proxy,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.video-link {',
+    '  bottom: 0;',
+    '}',
+
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.chromecast,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.proxy {',
+    '  left: 0;',
+    '}',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.airplay,',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.video-link {',
+    '  right: 0;',
+    '}',
+    css_prefix + ' > ul > li > div.media_summary > div.icons-container > a.airplay + a.video-link {',
+    '  right: 17px; /* (60 - 25)/2 to center when there is no proxy icon */',
+    '}',
+
+    '</style>'
+  ]
+
+  const title = unsafeWindow.document.title
+  if (title) {
+    html.push(`<h2>${title}</h2>`)
+  }
+
+  html.push('<ul></ul>')
+
+  update_media_formats_container(media_formats_container, html.join("\n"))
+  html = null
+
+  const ul = media_formats_container.querySelector(':scope > div > ul')
+  if (!ul) return
+
+  for (let format of state.formats) {
+    const li = format_to_listitem(format)
+    ul.appendChild(li)
+    attach_button_event_handlers_to_listitem(li, format)
+    insert_webcast_reloaded_div_to_listitem(li, format)
+  }
+
+  show_media_formats_container(media_formats_container)
+}
+
+// -----------------------------------------------------------------------------
+
+const format_to_listitem = (format) => {
+  const inner_html = [
+    `<div class="${constants.dom_classes.div_media_summary}">`,
+      '<table>',
+        format_subset_to_tablerows(format),
+      '</table>',
+    '</div>',
+    `<div class="${constants.dom_classes.div_media_buttons}">`,
+      `<button class="${constants.dom_classes.btn_start_media}">${constants.button_text.start_media}</button>`,
+      `<button class="${constants.dom_classes.btn_show_details}">${constants.button_text.show_details}</button>`,
+    '</div>',
+    `<div class="${constants.dom_classes.div_media_details}" style="display:none">`,
+      `<pre>${JSON.stringify(format, null, 2)}</pre>`,
+    '</div>'
+  ]
+
+  return make_element('li', inner_html.join("\n"))
+}
+
+const format_subset_to_tablerows = (format) => {
+  const rows = []
+
+  if (format.mimeType)
+    rows.push(['mime type', format.mimeType])
+  if (format.bitrate) {
+    let value = Math.floor(format.bitrate / 1000) + ' kbps'
+
+    rows.push(['bitrate', value])
+  }
+  if (format.hasAudio && format.audioBitrate) {
+    let value = format.audioBitrate + ' kbps'
+
+    if (format.bitrate) {
+      if (format.hasVideo)
+        rows.push(['audio bitrate', value])
+      else
+        rows[rows.length - 1][1] = value
+    }
+    else {
+      rows.push(['bitrate', value])
+    }
+  }
+  if (format.hasVideo) {
+    if (format.quality && format.quality.label)
+      rows.push(['video quality', format.quality.label])
+    if (format.codec && format.codec.video)
+      rows.push(['video codec', format.codec.video])
+  }
+  if (format.hasAudio) {
+    if (format.codec && format.codec.audio)
+      rows.push(['audio codec', format.codec.audio])
+  }
+
+  return rows.length
+    ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
+    : ''
+}
+
+// -----------------------------------------------------------------------------
+
+const attach_button_event_handlers_to_listitem = (li, format) => {
+  const button_start_media  = li.querySelector('button.' + constants.dom_classes.btn_start_media)
+  const button_show_details = li.querySelector('button.' + constants.dom_classes.btn_show_details)
+  const div_media_details   = li.querySelector('div.'    + constants.dom_classes.div_media_details)
+
+  button_start_media.addEventListener('click', () => {
+    const video_url   = format.url
+    const video_type  = format.mimeType
+    const vtt_url     = null
+    const referer_url = unsafeWindow.location.href
+
+    process_video_url(video_url, video_type, vtt_url, referer_url)
+  })
+
+  button_show_details.addEventListener('click', () => {
+    div_media_details.style.display = (div_media_details.style.display === 'none') ? 'block' : 'none'
+  })
+}
+
+const insert_webcast_reloaded_div_to_listitem = (li, format) => {
+  const block_element = li.querySelector('div.' + constants.dom_classes.div_media_summary)
+  const video_url     = format.url
+  const vtt_url       = null
+  const referer_url   = unsafeWindow.location.href
+
+  insert_webcast_reloaded_div(block_element, video_url, vtt_url, referer_url)
+}
+
+// -----------------------------------------------------------------------------
+
+var insert_webcast_reloaded_div = function(block_element, video_url, vtt_url, referer_url) {
+  var webcast_reloaded_div = make_webcast_reloaded_div(video_url, vtt_url, referer_url)
+
+  if (block_element.childNodes.length)
+    block_element.insertBefore(webcast_reloaded_div, block_element.childNodes[0])
+  else
+    block_element.appendChild(webcast_reloaded_div)
+}
+
+const make_webcast_reloaded_div = (video_url, vtt_url, referer_url) => {
+  const webcast_reloaded_urls = {
+//  "index":             get_webcast_reloaded_url(                  video_url, vtt_url, referer_url),
+    "chromecast_sender": get_webcast_reloaded_url_chromecast_sender(video_url, vtt_url, referer_url),
+    "airplay_sender":    get_webcast_reloaded_url_airplay_sender(   video_url, vtt_url, referer_url),
+    "proxy":             get_webcast_reloaded_url_proxy(            video_url, vtt_url, referer_url)
+  }
+
+  const div = make_element('div')
+
+  const html = [
+    '<a target="_blank" class="chromecast" href="' + webcast_reloaded_urls.chromecast_sender + '" title="Chromecast Sender"><img src="'       + constants.img_urls.base_webcast_reloaded_icons + 'chromecast.png"></a>',
+    '<a target="_blank" class="airplay" href="'    + webcast_reloaded_urls.airplay_sender    + '" title="ExoAirPlayer Sender"><img src="'     + constants.img_urls.base_webcast_reloaded_icons + 'airplay.png"></a>',
+    '<a target="_blank" class="proxy" href="'      + webcast_reloaded_urls.proxy             + '" title="HLS-Proxy Configuration"><img src="' + constants.img_urls.base_webcast_reloaded_icons + 'proxy.png"></a>',
+    '<a target="_blank" class="video-link" href="' + video_url                               + '" title="direct link to video"><img src="'    + constants.img_urls.base_webcast_reloaded_icons + 'video_link.png"></a>'
+  ]
+
+  div.setAttribute('class', constants.dom_classes.div_webcast_icons)
+  div.innerHTML = html.join("\n")
+
+  return div
 }
 
 // ----------------------------------------------------------------------------- URL links to tools on Webcast Reloaded website
@@ -130,50 +581,7 @@ const get_webcast_reloaded_url_proxy = (hls_url, vtt_url, referer_url) => {
   return get_webcast_reloaded_url(hls_url, vtt_url, referer_url, /* force_http= */ true, /* force_https= */ false).replace('/index.html', '/proxy.html')
 }
 
-const make_webcast_reloaded_div = (video_url, vtt_url, referer_url) => {
-  const webcast_reloaded_urls = {
-//  "index":             get_webcast_reloaded_url(                  video_url, vtt_url, referer_url),
-    "chromecast_sender": get_webcast_reloaded_url_chromecast_sender(video_url, vtt_url, referer_url),
-    "airplay_sender":    get_webcast_reloaded_url_airplay_sender(   video_url, vtt_url, referer_url),
-    "proxy":             get_webcast_reloaded_url_proxy(            video_url, vtt_url, referer_url)
-  }
-
-  const div = make_element('div')
-
-  const html = [
-    '<a target="_blank" class="chromecast" href="' + webcast_reloaded_urls.chromecast_sender + '" title="Chromecast Sender"><img src="'       + constants.img_urls.base_webcast_reloaded_icons + 'chromecast.png"></a>',
-    '<a target="_blank" class="airplay" href="'    + webcast_reloaded_urls.airplay_sender    + '" title="ExoAirPlayer Sender"><img src="'     + constants.img_urls.base_webcast_reloaded_icons + 'airplay.png"></a>',
-    '<a target="_blank" class="proxy" href="'      + webcast_reloaded_urls.proxy             + '" title="HLS-Proxy Configuration"><img src="' + constants.img_urls.base_webcast_reloaded_icons + 'proxy.png"></a>',
-    '<a target="_blank" class="video-link" href="' + video_url                               + '" title="direct link to video"><img src="'    + constants.img_urls.base_webcast_reloaded_icons + 'video_link.png"></a>'
-  ]
-
-  div.setAttribute('class', constants.dom_classes.div_webcast_icons)
-  div.innerHTML = html.join("\n")
-
-  return div
-}
-
-var insert_webcast_reloaded_div = function(block_element, video_url, vtt_url, referer_url) {
-  var webcast_reloaded_div = make_webcast_reloaded_div(video_url, vtt_url, referer_url)
-
-  if (block_element.childNodes.length)
-    block_element.insertBefore(webcast_reloaded_div, block_element.childNodes[0])
-  else
-    block_element.appendChild(webcast_reloaded_div)
-}
-
-// ----------------------------------------------------------------------------- URL redirect
-
-const redirect_to_url = (url) => {
-  if (!url) return
-
-  try {
-    unsafeWindow.top.location = url
-  }
-  catch(e) {
-    unsafeWindow.location = url
-  }
-}
+// ----------------------------------------------------------------------------- URL handlers
 
 const process_video_url = (video_url, video_type, vtt_url, referer_url) => {
   if (!referer_url)
@@ -212,298 +620,14 @@ const process_video_url = (video_url, video_type, vtt_url, referer_url) => {
   }
 }
 
-// ----------------------------------------------------------------------------- display interstitial button
+const redirect_to_url = (url) => {
+  if (!url) return
 
-const add_media_formats_button = () => {
-  const button = make_element('button', `<span>${strings.buttons.show_media_formats}</span>`)
-
-  button.style.backgroundColor = '#065fd4'
-  button.style.color = '#fff'
-  button.style.padding = '10px 15px'
-  button.style.borderRadius = '18px'
-  button.style.borderStyle = 'none'
-  button.style.outline = 'none'
-  button.style.fontWeight = 'bold'
-  button.style.cursor = 'pointer'
-
-  button.addEventListener('click', rewrite_page_dom)
-
-  const container = document.querySelector('div#owner > div#subscribe-button')
-  if (container) {
-    // DOM assertion passes
-    button.style.margin = '0 0 0 10px'
-
-    container.parentElement.appendChild(button)
+  try {
+    unsafeWindow.top.location = url
   }
-  else {
-    // fallback
-    button.style.position = 'fixed'
-    button.style.top = '10px'
-    button.style.right = '10px'
-    button.style.zIndex = '9999'
-
-    document.body.appendChild(button)
-  }
-}
-
-// ----------------------------------------------------------------------------- display results
-
-const format_subset_to_tablerows = (format) => {
-  const rows = []
-
-  if (format.mimeType)
-    rows.push(['mime type', format.mimeType])
-  if (format.bitrate) {
-    let value = Math.floor(format.bitrate / 1000) + ' kbps'
-
-    rows.push(['bitrate', value])
-  }
-  if (format.hasAudio && format.audioBitrate) {
-    let value = format.audioBitrate + ' kbps'
-
-    if (format.bitrate) {
-      if (format.hasVideo)
-        rows.push(['audio bitrate', value])
-      else
-        rows[rows.length - 1][1] = value
-    }
-    else {
-      rows.push(['bitrate', value])
-    }
-  }
-  if (format.hasVideo) {
-    if (format.quality && format.quality.label)
-      rows.push(['video quality', format.quality.label])
-    if (format.codec && format.codec.video)
-      rows.push(['video codec', format.codec.video])
-  }
-  if (format.hasAudio) {
-    if (format.codec && format.codec.audio)
-      rows.push(['audio codec', format.codec.audio])
-  }
-
-  return rows.length
-    ? rows.map(row => `<tr><td>${row[0]}:</td><td>${row[1]}</td></tr>`).join("\n")
-    : ''
-}
-
-const format_to_listitem = (format) => {
-  const inner_html = [
-    `<div class="${constants.dom_classes.div_media_summary}">`,
-      '<table>',
-        format_subset_to_tablerows(format),
-      '</table>',
-    '</div>',
-    `<div class="${constants.dom_classes.div_media_buttons}">`,
-      `<button class="${constants.dom_classes.btn_start_media}">${strings.buttons.start_media}</button>`,
-      `<button class="${constants.dom_classes.btn_show_details}">${strings.buttons.show_details}</button>`,
-    '</div>',
-    `<div class="${constants.dom_classes.div_media_details}" style="display:none">`,
-      `<pre>${JSON.stringify(format, null, 2)}</pre>`,
-    '</div>'
-  ]
-
-  return make_element('li', inner_html.join("\n"))
-}
-
-const attach_button_event_handlers_to_listitem = (li, format) => {
-  const button_start_media  = li.querySelector('button.' + constants.dom_classes.btn_start_media)
-  const button_show_details = li.querySelector('button.' + constants.dom_classes.btn_show_details)
-  const div_media_details   = li.querySelector('div.'    + constants.dom_classes.div_media_details)
-
-  button_start_media.addEventListener('click', () => {
-    const video_url   = format.url
-    const video_type  = format.mimeType
-    const vtt_url     = null
-    const referer_url = unsafeWindow.location.href
-
-    process_video_url(video_url, video_type, vtt_url, referer_url)
-  })
-
-  button_show_details.addEventListener('click', () => {
-    div_media_details.style.display = (div_media_details.style.display === 'none') ? 'block' : 'none'
-  })
-}
-
-const insert_webcast_reloaded_div_to_listitem = (li, format) => {
-  const block_element = li.querySelector('div.' + constants.dom_classes.div_media_summary)
-  const video_url     = format.url
-  const vtt_url       = null
-  const referer_url   = unsafeWindow.location.href
-
-  insert_webcast_reloaded_div(block_element, video_url, vtt_url, referer_url)
-}
-
-const rewrite_page_dom = () => {
-  const head  = unsafeWindow.document.getElementsByTagName('head')[0]
-  const body  = unsafeWindow.document.body
-  const title = unsafeWindow.document.title
-
-  const html = {
-    "head": [
-      '<style>',
-
-      'body {',
-      '  background-color: #fff;',
-      '}',
-
-      'body > div > h2 {',
-      '  text-align: center;',
-      '  margin: 0.5em 0;',
-      '}',
-
-      'body > div > ul > li > div.media_summary {',
-      '}',
-      'body > div > ul > li > div.media_summary > table {',
-      '  border-collapse: collapse;',
-      '}',
-      'body > div > ul > li > div.media_summary > table td {',
-      '  border: 1px solid #999;',
-      '  padding: 0.5em;',
-      '}',
-      'body > div > ul > li > div.media_summary > div.icons-container {',
-      '}',
-
-      'body > div > ul > li > div.media_buttons {',
-      '}',
-      'body > div > ul > li > div.media_buttons > button.start_media {',
-      '}',
-      'body > div > ul > li > div.media_buttons > button.show_details {',
-      '  margin-left: 0.5em;',
-      '}',
-
-      'body > div > ul > li > div.media_details {',
-      '}',
-      'body > div > ul > li > div.media_details > pre {',
-      '  background-color: #eee;',
-      '  padding: 0.5em;',
-      '}',
-
-      // --------------------------------------------------- CSS: reset
-
-      'h2 {',
-      '  font-size: 24px;',
-      '}',
-
-      'body, td {',
-      '  font-size: 18px;',
-      '}',
-
-      'button {',
-      '  font-size: 16px;',
-      '}',
-
-      'pre {',
-      '  font-size: 14px;',
-      '}',
-
-      // --------------------------------------------------- CSS: separation between media formats
-
-      'body > div > ul {',
-      '  list-style: none;',
-      '  margin: 0;',
-      '  padding: 0;',
-      '}',
-
-      'body > div > ul > li {',
-      '  list-style: none;',
-      '  margin-top: 0.5em;',
-      '  border-top: 1px solid #999;',
-      '  padding-top: 0.5em;',
-      '}',
-
-      'body > div > ul > li > div {',
-      '  margin-top: 0.5em;',
-      '}',
-
-      // --------------------------------------------------- CSS: links to tools on Webcast Reloaded website
-
-      'body > div > ul > li > div.media_summary > div.icons-container {',
-      '  display: block;',
-      '  position: relative;',
-      '  z-index: 1;',
-      '  float: right;',
-      '  margin: 0.5em;',
-      '  width: 60px;',
-      '  height: 60px;',
-      '  max-height: 60px;',
-      '  vertical-align: top;',
-      '  background-color: #d7ecf5;',
-      '  border: 1px solid #000;',
-      '  border-radius: 14px;',
-      '}',
-
-      'body > div > ul > li > div.media_summary > div.icons-container > a.chromecast,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.chromecast > img,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.airplay,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.airplay > img,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.proxy,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.proxy > img,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.video-link,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.video-link > img {',
-      '  display: block;',
-      '  width: 25px;',
-      '  height: 25px;',
-      '}',
-
-      'body > div > ul > li > div.media_summary > div.icons-container > a.chromecast,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.airplay,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.proxy,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.video-link {',
-      '  position: absolute;',
-      '  z-index: 1;',
-      '  text-decoration: none;',
-      '}',
-
-      'body > div > ul > li > div.media_summary > div.icons-container > a.chromecast,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.airplay {',
-      '  top: 0;',
-      '}',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.proxy,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.video-link {',
-      '  bottom: 0;',
-      '}',
-
-      'body > div > ul > li > div.media_summary > div.icons-container > a.chromecast,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.proxy {',
-      '  left: 0;',
-      '}',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.airplay,',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.video-link {',
-      '  right: 0;',
-      '}',
-      'body > div > ul > li > div.media_summary > div.icons-container > a.airplay + a.video-link {',
-      '  right: 17px; /* (60 - 25)/2 to center when there is no proxy icon */',
-      '}',
-
-      // ---------------------------------------------------
-
-      '</style>'
-    ],
-    "body": [
-      '<div>',
-        '<ul>',
-        '</ul>',
-      '</div>'
-    ]
-  }
-
-  if (title) {
-    html.head.unshift(`<title>${title}</title>`)
-    html.body.unshift(`<div><h2>${title}</h2></div>`)
-  }
-
-  head.innerHTML = '' + html.head.join("\n")
-  body.innerHTML = '' + html.body.join("\n")
-
-  const ul = body.querySelector('ul')
-  if (!ul) return
-
-  for (let format of state.formats) {
-    const li = format_to_listitem(format)
-    ul.appendChild(li)
-    attach_button_event_handlers_to_listitem(li, format)
-    insert_webcast_reloaded_div_to_listitem(li, format)
+  catch(e) {
+    unsafeWindow.location = url
   }
 }
 
@@ -622,38 +746,41 @@ const dedupe_formats = () => {
 
 // ----------------------------------------------------------------------------- bootstrap
 
-const init = async () => {
+const page_init = () => {
+  debug('starting to initialize..')
   add_default_trusted_type_policy()
 
-  const ytdl = new window.Ytdl.YtdlCore({
-    logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
-    disableInitialSetup: false,
-    disableBasicCache: true,
-    disableFileCache: true,
-    disablePoTokenAutoGeneration: true,
-    noUpdate: true
+  add_userscripts_row_container(async () => {
+    const ytdl = new window.Ytdl.YtdlCore({
+      logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
+      disableInitialSetup: false,
+      disableBasicCache: true,
+      disableFileCache: true,
+      disablePoTokenAutoGeneration: true,
+      noUpdate: true
+    })
+
+    let info = await ytdl.getFullInfo(window.location.href)
+    if (!info || !info.formats || !info.formats.length) return
+
+    state.formats = info.formats
+    info = null
+
+    // important: perform validation BEFORE normalization
+    // important: perform normalization BEFORE removing duplicates
+    await validate_formats_async()
+    normalize_formats()
+    dedupe_formats()
+    debug('number of formats that are both distinct and available: ' + state.formats.length)
+
+    if (state.formats && state.formats.length) {
+      add_show_media_formats_button()
+    }
   })
-
-  let info = await ytdl.getFullInfo(window.location.href)
-  if (!info || !info.formats || !info.formats.length) return
-
-  state.formats = info.formats
-  info = null
-
-  // important: perform validation BEFORE normalization
-  // important: perform normalization BEFORE removing duplicates
-  await validate_formats_async()
-  normalize_formats()
-  dedupe_formats()
-
-  if (user_options.show_media_formats_button)
-    add_media_formats_button()
-  else
-    rewrite_page_dom()
 }
 
 if (window.Ytdl && window.Ytdl.YtdlCore) {
-  init()
+  page_init()
 }
 
 // -----------------------------------------------------------------------------
