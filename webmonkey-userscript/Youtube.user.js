@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Youtube
 // @description  Play media in external player.
-// @version      4.0.1
+// @version      4.0.2
 // @match        *://youtube.googleapis.com/v/*
 // @match        *://*.youtube.com/watch?v=*
 // @match        *://*.youtube.com/embed/*
@@ -70,6 +70,12 @@ const state = {
   library: null,
   formats: null
 }
+
+if (!state.library && window.Ytdl && window.Ytdl.YtdlCore)
+  state.library = 'ybd-project'
+
+if (!state.library && window.ytdl)
+  state.library = 'distubejs'
 
 // ----------------------------------------------------------------------------- CSP
 
@@ -772,22 +778,28 @@ const page_init = () => {
 
   add_userscripts_row_container(async () => {
     let info
-    if (window.Ytdl && window.Ytdl.YtdlCore) {
-      state.library = 'ybd-project'
-      const ytdl = new window.Ytdl.YtdlCore({
-        logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
-        disableInitialSetup: false,
-        disableBasicCache: true,
-        disableFileCache: true,
-        disablePoTokenAutoGeneration: true,
-        noUpdate: true
-      })
-      info = await ytdl.getFullInfo(window.location.href)
+
+    switch(state.library) {
+      case 'ybd-project': {
+          const ytdl = new window.Ytdl.YtdlCore({
+            logDisplay: ['debug', 'info', 'success', 'warning', 'error'],
+            disableInitialSetup: false,
+            disableBasicCache: true,
+            disableFileCache: true,
+            disablePoTokenAutoGeneration: true,
+            noUpdate: true
+          })
+
+          info = await ytdl.getFullInfo(window.location.href)
+        }
+        break
+
+      case 'distubejs': {
+          info = await window.ytdl.getInfo(window.location.href)
+        }
+        break
     }
-    else if (window.ytdl) {
-      state.library = 'distubejs'
-      info = await window.ytdl.getInfo(window.location.href)
-    }
+
     if (!info || !info.formats || !info.formats.length) return
 
     state.formats = info.formats
@@ -806,6 +818,8 @@ const page_init = () => {
   })
 }
 
-page_init()
+if (state.library) {
+  page_init()
+}
 
 // -----------------------------------------------------------------------------
